@@ -1,0 +1,27 @@
+{
+  "name": "autotom-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "lucide-react": "0.468.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "recharts": "3.2.1",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.18.10",
+    "@types/react": "19.1.16",
+    "@types/react-dom": "19.1.9",
+    "@types/three": "0.180.0",
+    "typescript": "5.9.3",
+    "vite": "7.1.10"
+  }
+}

@@ -1,0 +1,101 @@
+name: autotom
+services:
+  web:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:${AUTOTOM_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: api
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment: &environment
+      MODEL_DIR: /model
+      DATA_DIR: /data
+      HOME: /tmp/autotom
+      ALLOWED_HOSTS: ${AUTOTOM_DOMAIN:-tomato.example.com}
+    volumes: &volumes
+      - type: bind
+        source: ${MODEL_DIR:-./model/model}
+        target: /model
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DATA_DIR:-./data}
+        target: /data
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+  worker:
+    init: true
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: worker
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      <<: *environment
+      NVIDIA_VISIBLE_DEVICES: ${GPU_DEVICE:-0}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      JAVA_HEAP: ${JAVA_HEAP:-6g}
+    volumes: *volumes
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_DEVICE:-0}"]
+              capabilities: [gpu]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+  gateway:
+    image: caddy:2.10-alpine
+    profiles: [server]
+    ports: ["80:80", "443:443"]
+    environment:
+      AUTOTOM_DOMAIN: ${AUTOTOM_DOMAIN:-tomato.example.com}
+      AUTH_USER: ${AUTH_USER:-autotom}
+      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web]
+    restart: unless-stopped
+  test:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: api
+    command: ["pytest", "-q"]
+    volumes:
+      - ${MODEL_DIR:-./model/model}:/reference:ro
+    environment:
+      REFERENCE_MODEL: /reference
+  browser-tests:
+    profiles: [test]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.test
+    environment:
+      BASE_URL: http://web
+    volumes:
+      - ./data/browser-results:/app/test-results
+      - ./data/browser-report:/app/playwright-report
+    depends_on: [web]
+volumes:
+  caddy_data:
+  caddy_config:
