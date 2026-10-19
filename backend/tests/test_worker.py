@@ -6,6 +6,8 @@ import subprocess
 import sys
 import pytest
 from pydantic import ValidationError
+from autotom.layout import generate_layout
+from autotom.schema import Planting
 from autotom.adapter import atomic_write, default_config
 from autotom.store import Store
 from autotom.worker import gpu_check, package_model, publish_days, execute
@@ -22,6 +24,7 @@ def test_day_publication_waits_for_complete_marker_and_validates_metrics(model, 
     store = Store(tmp_path / "data")
     config = default_config(model)
     config.simulation.rows = config.simulation.plants_per_row = 1
+    config.planting = Planting.model_validate(generate_layout(config.simulation.model_dump(), config.room.model_dump(), legacy=True))
     run = store.create("run", "run", "revision", config)
     source = store.runs / "run/model/output/days/0001"
     source.mkdir(parents=True)
@@ -45,6 +48,7 @@ def test_day_publication_waits_for_complete_marker_and_validates_metrics(model, 
 def test_nonfinite_simulation_output_is_never_published(model, tmp_path):
     store = Store(tmp_path / "data")
     config = default_config(model)
+    config.planting = Planting.model_validate(generate_layout(config.simulation.model_dump(), config.room.model_dump(), legacy=True))
     run = store.create("run", "run", "r", config)
     source = store.runs / "run/model/output/days/0001"
     source.mkdir(parents=True)

@@ -5,7 +5,11 @@ export type SceneObject = {
   power_w: number; reflectance: number; enabled: boolean;
 };
 export type Config = {
-  version: 1;
+  version: 1 | 2;
+  planting: Planting;
+  groups: EditorGroup[];
+  parameter_overrides: Record<string, number | boolean | number[]>;
+  temperature_overrides: Record<string, number>;
   room: { width: number; length: number; height: number; enabled: boolean;
     wall_reflectance: number | null; floor_reflectance: number | null; ceiling_reflectance: number | null; };
   simulation: { days: number; rows: number; plants_per_row: number; density: number;
@@ -14,7 +18,19 @@ export type Config = {
   objects: SceneObject[];
   spectrum: { wavelength: number; amplitude: number }[];
 };
-export type ConfigResponse = { config: Config; revision: string; installed: boolean; inputs: Record<string, string[]> };
+export type Plant = {
+  id: string; name: string; role: 'central' | 'border'; reporting_id: number | null;
+  position: Vec3; rotation: Vec3; enabled: boolean; row: number; col: number;
+};
+export type Planting = {
+  mode: 'preset' | 'custom'; pattern: 'grid' | 'staggered'; plant_spacing: number | null; row_spacing: number | null;
+  center: Vec3; rotation: number; plants: Plant[]; next_reporting_id: number;
+};
+export type EditorGroup = { id: string; name: string; members: string[] };
+export type Parameter = { key: string; label: string; type: 'number' | 'integer' | 'array' | 'boolean'; group: string;
+  unit: string; description?: string; min?: number; max?: number; length?: number; value: number | boolean | number[] };
+export type InputPreview = { parameters: Parameter[]; temperatures: number[]; revision: string };
+export type ConfigResponse = { config: Config; revision: string; installed: boolean; inputs: Record<string, string[]>; adapter?: { version: number | null; required_version: number; compatible: boolean; upgrade_available: boolean } };
 export type Run = {
   id: string; name: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   created_at: string; started_at: string | null; finished_at: string | null;

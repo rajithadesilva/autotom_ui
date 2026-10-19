@@ -52,7 +52,10 @@ def publish_days(store: Store, run):
             continue
         with (day / "metrics.csv").open() as f:
             plants = [Metric.model_validate(row) for row in csv.DictReader(f)]
-        if len(plants) != run["config"]["simulation"]["rows"] * run["config"]["simulation"]["plants_per_row"]:
+        config = run['config']
+        expected_ids = ({p['reporting_id'] for p in config['planting']['plants'] if p['enabled'] and p['role'] == 'central'}
+                        if 'planting' in config else set(range(1, config['simulation']['rows'] * config['simulation']['plants_per_row'] + 1)))
+        if {p.plant for p in plants} != expected_ids:
             raise RuntimeError("Daily export contains an unexpected plant count")
         if len({p.plant for p in plants}) != len(plants):
             raise RuntimeError("Daily export has duplicate plant identifiers")

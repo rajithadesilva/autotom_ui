@@ -1,6 +1,8 @@
 """The browser and model share metres, degrees, Z-up, Euler XYZ rotations."""
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .layout import generate_layout
+from .parameters import validate_overrides
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 Positive = Annotated[Finite, Field(gt=0, le=100)]
@@ -68,21 +70,120 @@ class Simulation(StrictModel):
         return self
 
 
+class Plant(StrictModel):
+    id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
+    name: str = Field(min_length=1, max_length=80)
+    role: Literal["central", "border"] = "central"
+    reporting_id: int | None = Field(default=None, ge=1, le=2147483647)
+    position: Vector
+    rotation: Vector = (0, 0, 0)
+    enabled: bool = True
+    row: int = 1
+    col: int = 1
+
+    @model_validator(mode="after")
+    def valid_plant(self):
+        if any(abs(n) > 100 for n in self.position) or self.rotation[:2] != (0, 0) or abs(self.rotation[2]) > 360:
+            raise ValueError("Plants must be upright, within ±100 metres and ±360 degrees")
+        if (self.role == "central") != (self.reporting_id is not None):
+            raise ValueError("Only central plants must have reporting IDs")
+        return self
+
+
+class Planting(StrictModel):
+    mode: Literal["preset", "custom"] = "preset"
+    pattern: Literal["grid", "staggered"] = "grid"
+    plant_spacing: Positive | None = None
+    row_spacing: Positive | None = None
+    center: Vector = (0.6, 0.6, 0)
+    rotation: Finite = Field(default=0, ge=-360, le=360)
+    plants: list[Plant] = Field(max_length=2000)
+    next_reporting_id: int = Field(ge=1, le=2147483647)
+
+
+class EditorGroup(StrictModel):
+    id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
+    name: str = Field(min_length=1, max_length=80)
+    members: list[str] = Field(min_length=2, max_length=2200)
+
+
+class LayoutRequest(StrictModel):
+    simulation: Simulation
+    room: Room
+    pattern: Literal["grid", "staggered"] = "grid"
+    plant_spacing: Positive | None = None
+    row_spacing: Positive | None = None
+    center: Vector
+    rotation: Finite = Field(default=0, ge=-360, le=360)
+
+
+class InputPreviewRequest(StrictModel):
+    plant_input: str
+    temperature_input: str
+
+
 class SpectrumPoint(StrictModel):
     wavelength: Finite = Field(ge=400, le=700)
     amplitude: Finite = Field(ge=0, le=1e6)
 
 
 class Configuration(StrictModel):
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     room: Room = Field(default_factory=Room)
     simulation: Simulation = Field(default_factory=Simulation)
     objects: list[SceneObject] = Field(default_factory=list, max_length=200)
     spectrum: list[SpectrumPoint] = Field(min_length=2, max_length=301)
 
+    planting: Planting
+    groups: list[EditorGroup] = Field(default_factory=list, max_length=1100)
+    parameter_overrides: dict[str, int | float | bool | list[float]] = Field(default_factory=dict)
+    temperature_overrides: dict[str, Finite] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate(cls, data):
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if data.get('version', 1) == 1 or 'planting' not in data:
+            sim = Simulation.model_validate(data.get('simulation', {})).model_dump()
+            room = Room.model_validate(data.get('room', {})).model_dump()
+            if 'planting' not in data:
+                layout = generate_layout(sim, room, legacy=True)
+                used = {o.get('id') for o in data.get('objects', []) if isinstance(o, dict)}
+                for index, plant in enumerate(layout['plants']):
+                    suffix = 0
+                    while plant['id'] in used:
+                        suffix += 1
+                        plant['id'] = f'plant-{index+1}-migrated-{suffix}'
+                    used.add(plant['id'])
+                data['planting'] = layout
+            if data.get('version', 1) == 1:
+                data['version'] = 2
+        validate_overrides(data.get('parameter_overrides', {}))
+        temperatures = data.get('temperature_overrides', {})
+        if not isinstance(temperatures, dict):
+            raise ValueError('Temperature overrides must be an object')
+        for key in temperatures:
+            if not isinstance(key, str) or not key.isdigit() or str(int(key)) != key or not 0 <= int(key) < 365:
+                raise ValueError('Temperature override days must be integers from 0 to 364')
+        return data
+
     @model_validator(mode="after")
     def consistent_scene(self):
-        ids = [o.id for o in self.objects]
+        ids = [o.id for o in self.objects] + [p.id for p in self.planting.plants]
+        reports = [p.reporting_id for p in self.planting.plants if p.role == 'central']
+        if len(reports) != len(set(reports)) or (reports and self.planting.next_reporting_id <= max(reports)):
+            raise ValueError('Plant reporting IDs must be unique and below next_reporting_id')
+        central = sum(p.enabled and p.role == 'central' for p in self.planting.plants)
+        border = sum(p.enabled and p.role == 'border' for p in self.planting.plants)
+        if not 1 <= central <= 100 or border > 1000:
+            raise ValueError('Require 1–100 enabled central plants and at most 1000 enabled border clones')
+        members = [m for group in self.groups for m in group.members]
+        if len({g.id for g in self.groups}) != len(self.groups) or set(g.id for g in self.groups) & set(ids):
+            raise ValueError('Group IDs must be unique and separate from item IDs')
+        if len(members) != len(set(members)) or not set(members) <= set(ids):
+            raise ValueError('Group members must exist and belong to only one group')
         if len(ids) != len(set(ids)):
             raise ValueError("Object IDs must be unique")
         wavelengths = [p.wavelength for p in self.spectrum]
@@ -119,11 +220,41 @@ class DailyResult(StrictModel):
     plants: list[Metric]
 
 
+class AdapterStatus(StrictModel):
+    version: int | None
+    required_version: int
+    compatible: bool
+    upgrade_available: bool
+
+
+class ParameterDefinition(StrictModel):
+    key: str
+    symbol: str
+    row: int | None = None
+    label: str
+    type: Literal["number", "integer", "array", "boolean"]
+    group: str
+    unit: str
+    description: str = ""
+    min: Finite | None = None
+    max: Finite | None = None
+    length: int | None = None
+    default: int | float | bool | list[Finite] | None = None
+    value: int | float | bool | list[Finite]
+
+
+class InputPreviewResponse(StrictModel):
+    parameters: list[ParameterDefinition]
+    temperatures: list[Finite]
+    revision: str
+
+
 class ConfigurationResponse(StrictModel):
     config: Configuration
     revision: str
     installed: bool
     inputs: dict[str, list[str]]
+    adapter: AdapterStatus
 
 
 class RunRecord(StrictModel):

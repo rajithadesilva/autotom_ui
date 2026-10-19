@@ -9,8 +9,11 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .adapter import Conflict, ModelError
 from .project import Project
 from .schema import (CreateRun, SaveConfiguration, ConfigurationResponse, DailyResult,
-                     RunRecord, RunDetail, HealthResponse, LogResponse)
+                     RunRecord, RunDetail, HealthResponse, LogResponse, InputPreviewRequest, InputPreviewResponse, LayoutRequest, Planting)
 from .store import Store
+from .parameters import preview
+from .layout import generate_layout
+from .adapter import revision
 
 DATA = Path(os.getenv("DATA_DIR", "/data"))
 store = Store(DATA)
@@ -63,6 +66,26 @@ def setup():
     return project.setup()
 
 
+@app.post("/api/inputs/preview", response_model=InputPreviewResponse)
+def input_preview(body: InputPreviewRequest):
+    with project.locked():
+        try:
+            return {**preview(project.model, body.plant_input, body.temperature_input), 'revision': revision(project.model)}
+        except (ValueError, OSError) as error:
+            raise ModelError(str(error)) from error
+
+
+@app.post("/api/layout/preview", response_model=Planting)
+def layout_preview(body: LayoutRequest):
+    try:
+        result = Planting.model_validate(generate_layout(body.simulation.model_dump(), body.room.model_dump(), body.model_dump()))
+    except ValueError as error:
+        raise ModelError(str(error)) from error
+    if len([p for p in result.plants if p.role == 'border']) > 1000:
+        raise ModelError('At most 1000 enabled border clones')
+    return result
+
+
 @app.put("/api/config", response_model=ConfigurationResponse)
 def save_config(body: SaveConfiguration):
     return project.save(body.revision, body.config)
@@ -94,7 +117,9 @@ def run_detail(identifier):
     run["available_days"] = sorted(int(p.name) for p in directory.glob("[0-9][0-9][0-9][0-9]")
                                    if (p / "metrics.json").is_file())
     run["raw_available"] = (store.runs / identifier / "raw.zip").is_file()
-    return run
+    # SSE bypasses FastAPI response-model serialization. Normalize here so both
+    # transports migrate historical configs identically without changing stored data.
+    return RunDetail.model_validate(run).model_dump(mode="json")
 
 
 @app.get("/api/runs/{identifier}", response_model=RunDetail)

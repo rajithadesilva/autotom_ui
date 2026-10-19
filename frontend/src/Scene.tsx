@@ -6,17 +6,19 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import type { Config, SceneObject, Vec3 } from './types';
 import { artifactUrl } from './types';
+import { itemsOf, isPlant, transformPoses, type Pose, type Item } from './editor';
 
 type Props = {
-  config: Config; selected: string | null; mode: 'translate' | 'rotate';
+  config: Config; selected: string[]; mode: 'translate' | 'rotate'; tool: 'orbit' | 'box'; readOnly: boolean;
   result: { run: string; day: number } | null; showRoom: boolean;
-  onSelect: (id: string | null) => void;
-  onTransform: (id: string, position: Vec3, rotation: Vec3) => void;
+  onSelect: (ids: string[], additive?: boolean, expandGroups?: boolean) => void;
+  onTransform: (poses: Pose[]) => void;
+  onPivot: (pivot: Vec3) => void;
 };
 type Context = {
   scene: THREE.Scene; camera: THREE.PerspectiveCamera; renderer: THREE.WebGLRenderer;
   orbit: OrbitControls; transform: TransformControls; world: THREE.Group;
-  objects: Map<string, THREE.Group>; result: THREE.Group; helper: THREE.BoxHelper;
+  objects: Map<string, THREE.Group>; result: THREE.Group; helper: THREE.BoxHelper; pivot: THREE.Group; outlines: THREE.Group;
 };
 
 function dispose(group: THREE.Object3D) {
@@ -60,7 +62,7 @@ function makeObject(obj: SceneObject): THREE.Group {
   return group;
 }
 
-function roomPreview(config: Config, showRoom: boolean, includePlants: boolean) {
+function roomPreview(config: Config, showRoom: boolean) {
   const group = new THREE.Group();
   const { width: w, length: l, height: h } = config.room;
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, l), material('#394a40', 0.7));
@@ -70,18 +72,21 @@ function roomPreview(config: Config, showRoom: boolean, includePlants: boolean) 
     new THREE.LineBasicMaterial({ color: '#6d8271', transparent: true, opacity: 0.5 }));
   frame.position.set(w / 2, l / 2, h / 2);
   if (showRoom && config.room.enabled) group.add(frame);
-  if (includePlants) {
-    const s = config.simulation;
-    const spacing = 1 / Math.sqrt(s.density);
-    for (let row = 0; row < s.rows; row++) {
-      for (let col = 0; col < s.plants_per_row; col++) {
-        const block = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.065), material('#7a8464'));
-        block.position.set(w / 2 + (col - (s.plants_per_row - 1) / 2) * spacing,
-          l / 2 + (row - (s.rows - 1) / 2) * spacing, 0.0325);
-        group.add(block);
-      }
-    }
-  }
+  return group;
+}
+
+function makePlant(plant: Config['planting']['plants'][number], config: Config) {
+  const group = new THREE.Group();
+  group.userData.id = plant.id;
+  group.position.fromArray(plant.position);
+  group.rotation.z = THREE.MathUtils.degToRad(plant.rotation[2]);
+  group.visible = plant.enabled;
+  const width = Number(config.parameter_overrides.rockwool_width ?? .1);
+  const height = Number(config.parameter_overrides.rockwool_height ?? .065);
+  const block = new THREE.Mesh(new THREE.BoxGeometry(width,width,height),material(plant.role === 'border' ? '#897c58' : '#7aab64'));
+  block.position.z = height/2;
+  const arrow = new THREE.ArrowHelper(new THREE.Vector3(1,0,0),new THREE.Vector3(0,0,height+.01),width*.7,plant.role === 'border' ? 0xc4a66a : 0xb8e68b,.025,.015);
+  group.add(block,arrow);
   return group;
 }
 
@@ -93,6 +98,7 @@ export default function Scene(props: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(0);
+  const [box, setBox] = useState<{x: number; y: number; width: number; height: number} | null>(null);
 
   useEffect(() => {
     const element = container.current!;
@@ -113,10 +119,10 @@ export default function Scene(props: Props) {
     transform.setSize(0.7);
     transform.setSpace('world');
     scene.add(transform.getHelper());
-    const world = new THREE.Group(), result = new THREE.Group();
+    const world = new THREE.Group(), result = new THREE.Group(), pivot = new THREE.Group(), outlines = new THREE.Group();
     const helper = new THREE.BoxHelper(new THREE.Object3D(), 0xb7e68b);
     helper.visible = false;
-    scene.add(world, result, helper);
+    scene.add(world, result, helper, pivot, outlines);
     scene.add(new THREE.HemisphereLight(0xf0f4df, 0x364f3c, 2.5));
     const key = new THREE.DirectionalLight(0xffffff, 3);
     key.position.set(-2, -3, 6);
@@ -126,7 +132,7 @@ export default function Scene(props: Props) {
     grid.position.set(0.6, 0.6, -0.006);
     scene.add(grid);
     const objects = new Map<string, THREE.Group>();
-    ctx.current = { scene, camera, renderer, orbit, transform, world, objects, result, helper };
+    ctx.current = { scene, camera, renderer, orbit, transform, world, objects, result, helper, pivot, outlines };
     const resize = new ResizeObserver(() => {
       const { width, height } = element.getBoundingClientRect();
       renderer.setSize(width, height);
@@ -135,36 +141,82 @@ export default function Scene(props: Props) {
     });
     resize.observe(element);
     let dragging = false;
+    let before: Item[] = [], center = new THREE.Vector3();
+    function delta() { pivot.updateMatrixWorld(true); return new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z).multiply(pivot.matrixWorld); }
+    function previewTransform() {
+      for (const pose of transformPoses(before,center,delta())) {
+        const object = objects.get(pose.id);
+        if (object) { object.position.fromArray(pose.position); object.rotation.set(...pose.rotation.map(THREE.MathUtils.degToRad) as Vec3,'XYZ'); }
+      }
+    }
+    transform.addEventListener('objectChange', previewTransform);
     transform.addEventListener('dragging-changed', event => {
-      orbit.enabled = !event.value;
       dragging = Boolean(event.value);
-      if (!event.value && transform.object) {
-        const obj = transform.object;
-        const rot = new THREE.Euler().setFromQuaternion(obj.quaternion, 'XYZ');
-        propsRef.current.onTransform(obj.userData.id, obj.position.toArray() as Vec3,
-          [rot.x, rot.y, rot.z].map(THREE.MathUtils.radToDeg) as Vec3);
+      orbit.enabled = !event.value && propsRef.current.tool === 'orbit';
+      if (event.value) {
+        center.copy(pivot.position);
+        before = itemsOf(propsRef.current.config).filter(i => propsRef.current.selected.includes(i.id));
+      } else if (before.length) {
+        propsRef.current.onTransform(transformPoses(before,center,delta()));
+        before=[];
       }
     });
     const pointer = new THREE.Vector2(), ray = new THREE.Raycaster();
-    let down = [0, 0];
-    const pointerDown = (event: PointerEvent) => { down = [event.clientX, event.clientY]; };
-    const click = (event: PointerEvent) => {
-      if (dragging || transform.axis || propsRef.current.result || Math.hypot(event.clientX - down[0], event.clientY - down[1]) > 4) return;
+    let down = [0, 0], boxing = false, ignoreUp = false;
+    const pointerDown = (event: PointerEvent) => {
+      down = [event.clientX, event.clientY]; ignoreUp=false;
+      if (event.button !== 0 || propsRef.current.readOnly) return;
+      if (propsRef.current.tool === 'box') {
+        boxing=true;
+        renderer.domElement.setPointerCapture(event.pointerId);
+        const rect = element.getBoundingClientRect();
+        setBox({ x:event.clientX-rect.left,y:event.clientY-rect.top,width:0,height:0 });
+      }
+    };
+    const pointerMove = (event: PointerEvent) => {
+      if (!boxing) return;
       const rect = element.getBoundingClientRect();
+      setBox({ x:Math.min(down[0],event.clientX)-rect.left, y:Math.min(down[1],event.clientY)-rect.top,
+        width:Math.abs(event.clientX-down[0]),height:Math.abs(event.clientY-down[1]) });
+    };
+    const click = (event: PointerEvent) => {
+      if (event.button !== 0 || propsRef.current.readOnly || ignoreUp) return;
+      const rect = element.getBoundingClientRect();
+      const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+      if (boxing) {
+        boxing=false; setBox(null);
+        const left=Math.min(down[0],event.clientX),right=Math.max(down[0],event.clientX),top=Math.min(down[1],event.clientY),bottom=Math.max(down[1],event.clientY);
+        const ids: string[]=[];
+        for (const [id,object] of objects) {
+          const point=object.getWorldPosition(new THREE.Vector3()).project(camera);
+          const x=rect.left+(point.x+1)/2*rect.width,y=rect.top+(1-point.y)/2*rect.height;
+          if (object.visible && point.z>=-1 && point.z<=1 && x>=left && x<=right && y>=top && y<=bottom) ids.push(id);
+        }
+        propsRef.current.onSelect(ids,additive,false);
+        return;
+      }
+      if (dragging || transform.axis || Math.hypot(event.clientX-down[0],event.clientY-down[1])>4) return;
       pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
       ray.setFromCamera(pointer, camera);
-      const hits = ray.intersectObjects([...objects.values()], true);
+      const hits = ray.intersectObjects([...objects.values()].filter(o => o.visible), true);
       let object: THREE.Object3D | null = hits[0]?.object ?? null;
       while (object && !object.userData.id) object = object.parent;
-      propsRef.current.onSelect(object?.userData.id ?? null);
+      propsRef.current.onSelect(object ? [object.userData.id] : [], additive);
     };
+    const cancel = () => { boxing=false; setBox(null); };
+    const escapeBox = (event:KeyboardEvent) => {if(event.key==='Escape'&&boxing) {ignoreUp=true;cancel();}};
+    window.addEventListener('keydown',escapeBox);
     renderer.domElement.addEventListener('pointerdown', pointerDown);
     renderer.domElement.addEventListener('pointerup', click);
+    renderer.domElement.addEventListener('pointermove',pointerMove);
+    renderer.domElement.addEventListener('pointercancel',cancel);
     let animation = 0;
     const render = () => {
       animation = requestAnimationFrame(render);
       orbit.update();
-      if (helper.visible && transform.object) helper.setFromObject(transform.object);
+      for (const outline of outlines.children) {
+        if (outline instanceof THREE.BoxHelper) outline.update();
+      }
       renderer.render(scene, camera);
     };
     render();
@@ -173,6 +225,9 @@ export default function Scene(props: Props) {
       cancelAnimationFrame(animation); resize.disconnect();
       renderer.domElement.removeEventListener('pointerdown', pointerDown);
       renderer.domElement.removeEventListener('pointerup', click);
+      renderer.domElement.removeEventListener('pointermove',pointerMove);
+      renderer.domElement.removeEventListener('pointercancel',cancel);
+      window.removeEventListener('keydown',escapeBox);
       transform.dispose(); orbit.dispose(); dispose(scene); renderer.dispose();
       renderer.domElement.remove(); ctx.current = null;
     };
@@ -183,23 +238,36 @@ export default function Scene(props: Props) {
     if (!context) return;
     context.transform.detach(); context.helper.visible = false;
     dispose(context.world); context.objects.clear();
-    context.world.add(roomPreview(props.config, props.showRoom, !props.result));
-    for (const object of props.config.objects) {
-      const group = makeObject(object);
+    context.world.add(roomPreview(props.config, props.showRoom));
+    for (const object of itemsOf(props.config)) {
+      if (isPlant(object) && props.readOnly) continue;
+      const group = isPlant(object) ? makePlant(object,props.config) : makeObject(object);
       context.objects.set(object.id, group);
       context.world.add(group);
     }
-  }, [props.config, props.showRoom, Boolean(props.result), ready]);
+  }, [props.config, props.showRoom, props.readOnly, ready]);
 
   useEffect(() => {
     const context = ctx.current;
     if (!context) return;
     context.transform.setMode(props.mode);
-    const selected = props.selected && context.objects.get(props.selected);
-    if (selected && !props.result && selected.visible) {
-      context.transform.attach(selected); context.helper.setFromObject(selected); context.helper.visible = true;
-    } else { context.transform.detach(); context.helper.visible = false; }
-  }, [props.selected, props.mode, props.config, props.result, ready]);
+    context.orbit.enabled = props.tool === 'orbit' || props.readOnly;
+    dispose(context.outlines);
+    const selected = props.selected.map(id => context.objects.get(id)).filter((i): i is THREE.Group => Boolean(i));
+    const upright = props.config.planting.plants.some(p => props.selected.includes(p.id));
+    context.transform.showX = !(props.mode === 'rotate' && upright);
+    context.transform.showY = !(props.mode === 'rotate' && upright);
+    context.transform.showZ = true;
+    if (selected.length && !props.readOnly && props.tool !== 'box') {
+      const bounds = new THREE.Box3();
+      for (const object of selected) bounds.union(new THREE.Box3().setFromObject(object));
+      bounds.getCenter(context.pivot.position); context.pivot.quaternion.identity();
+      propsRef.current.onPivot(context.pivot.position.toArray() as Vec3);
+      context.pivot.updateMatrixWorld(true);
+      context.transform.attach(context.pivot);
+    } else context.transform.detach();
+    if (!props.readOnly) for (const object of selected.filter(o=>o.visible)) context.outlines.add(new THREE.BoxHelper(object,0xb7e68b));
+  }, [props.selected, props.mode, props.config, props.readOnly, props.tool, ready]);
 
   useEffect(() => {
     const context = ctx.current;
@@ -260,6 +328,7 @@ export default function Scene(props: Props) {
   }
 
   return <div className="scene" aria-label="3D scene viewer" ref={container}>
+    {box && <div className="selection-box" style={{ left:box.x,top:box.y,width:box.width,height:box.height }} />}
     {(error || loading) && <div className={`scene-message ${error ? 'error' : ''}`} role="status">{error || 'Loading daily plant geometry…'}</div>}
     <div className="axis-label"><span className="x">X</span><span className="y">Y</span><span className="z">Z ↑</span><span>metres</span></div>
     <button className="fit-button" onClick={fit} disabled={loading}>{props.result ? 'Fit plants' : 'Fit scene'}</button>

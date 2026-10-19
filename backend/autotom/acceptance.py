@@ -5,6 +5,8 @@ import shutil
 from pathlib import Path
 from .adapter import install, read_config, revision, write_config
 from .project import Project
+from .layout import generate_layout
+from .schema import Planting
 from .schema import SceneObject
 from .smoke import pristine_copy
 from .store import Store
@@ -26,6 +28,7 @@ def main():
     config.simulation.rows = config.simulation.plants_per_row = 1
     config.simulation.border_rows = config.simulation.border_plants = 0
     config.simulation.rays = 2000000
+    config.planting = Planting.model_validate(generate_layout(config.simulation.model_dump(), config.room.model_dump(), legacy=True))
     project = Project(model, store)
     results = []
     for case in ("repeat-1", "repeat-2", "repeat-3", "native-grid", "moved-lamps", "opaque-panel"):

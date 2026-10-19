@@ -42,12 +42,16 @@ docker compose down
 
 - **Lights:** add individual spectral LEDs; select them from the scene/object list; drag the move/rotate gizmos or edit their coordinates. Emission arrows point along each LED's local +Z axis. A downward LED has rotation `(180, 0, 0)`. Edit power in watts, photoperiod, and the shared 400–700 nm spectrum.
 - **Surroundings:** resize the room, override surface reflectance, and add/move/rotate boxes or reflector panels. Panels are thin, opaque physical slabs. Leaving a room-surface override off retains its original spectral reflectance and transmission curves.
-- **Simulation:** set days, planting layout, density, border plants, seed, and rays; select existing model input files. Add new input files in the host model's `input/` subfolders and reload the page. Growth/temperature model behavior stays in the original RGG and CSV files.
+- **Plants:** generate grid or staggered layouts with independent spacing, centre, height, rotation, and border counts. **Generate layout** replaces plant placements; undo restores them. Add, duplicate, disable, move, or remove individual central plants and border clones. Plants remain upright and rotate around Z. Central plants have stable reporting IDs; border clones affect light and stay outside charts. Density sets model ground area (`enabled central plants / density`); custom spacing controls physical placement.
+- **Model parameters:** search 98 supported growth, architecture, photosynthesis, respiration, fruit, and light settings. Values start from the selected plant input. Overrides and daily-temperature edits are saved with the experiment; reset a field, section, or all overrides to use source values again. Array proportions must have the displayed shape and total 1. Temperature day 1 maps to upstream day 0; edits beyond the current duration remain saved.
+- **Selection and groups:** click an item, use Shift/Ctrl/Cmd-click or list checkboxes for multiple selection, or enable the box-selection tool and drag a rectangle. Box selection includes occluded item origins. Create named, flat groups mixing plants, lights, and surroundings; expand a group to select individual members. Move or rotate the selection with its shared gizmo or inspector controls. Groups containing plants rotate around Z only. Escape clears selection and returns to orbit controls.
+- **Undo/redo:** use the viewport buttons, Ctrl/Cmd+Z, or Ctrl/Cmd+Shift+Z (Ctrl/Cmd+Y also works). Each drag or completed numeric edit is one step. Saving retains history; reloading host files clears it. Result viewing disables editor controls.
+- **Simulation:** set days, seed, and rays; select existing model input files. Add new input files in the host model's `input/` subfolders and reload the page. One shared parameter set applies to all plants.
 - **Save changes** writes into your host model folder. **Run simulation** saves any current draft and queues an immutable source/input/configuration snapshot. Later edits apply to new runs. The editor is a schematic preview; displayed simulation plants come from real GroIMP exports.
 - Select a saved run, then use the day slider, chart click, or playback. Days become available only after their geometry and metrics are complete. Charts default to mean per simulated central plant; border clones affect light but are excluded from reporting.
 - **OBJ + MTL** downloads the selected day's full scene, central plant mesh, materials, and metrics as a ZIP. **CSV** downloads original model CSVs, canonical daily metrics CSVs, the configuration, provenance, and console log after a run finishes or is cancelled.
 
-Configuration is authoritative in `autotom.json`; saving generates `autotom.properties` and `autotom_scene.rgg`. Numeric RGG settings read those properties, while explicit scene geometry comes from the generated RGG. To edit configuration by hand, edit `autotom.json`, reload it in the browser, and save to regenerate its companion files. Changes to any non-hidden model/input file invalidate the editor revision, preventing an old browser tab from overwriting newer host edits. Edits to managed RGG parameter expressions can affect their fallback behavior; use the configuration for the exposed settings.
+Configuration version 2 is authoritative in `autotom.json`; saving generates `autotom.properties`, `autotom_scene.rgg`, `input/dynamic_input/autotom_effective_plant.csv`, and `input/temperature/autotom_effective_temperature.csv`. Effective CSVs preserve original input files and apply overrides before the upstream model's calculations. All generated files are rolled back together if saving fails and are included in run snapshots. Numeric RGG settings read those properties, while explicit scene geometry comes from the generated RGG. To edit configuration by hand, edit `autotom.json`, reload it in the browser, and save to regenerate its companion files. Changes to any non-hidden model/input file invalidate the editor revision, preventing an old browser tab from overwriting newer host edits. Edits to managed RGG parameter expressions can affect their fallback behavior; use the configuration for the exposed settings.
 
 The default experiment is 80 days, a 3×3 central layout with the original border plants, density 50 plants/m², 16 h photoperiod, original optical/input data, and 21,474,000 rays/day. Lower ray counts are useful for quick checks but increase Monte Carlo noise. Plant seed 0 maps to Flux seed 1, because Flux requires a positive seed.
 
@@ -69,9 +73,17 @@ Canonical metrics are `biomass_g` (total plant dry biomass including roots), `fr
 
 FastAPI's typed OpenAPI reference is at **http://localhost:8080/api/docs**, with its schema at **http://localhost:8080/api/openapi.json**. The application is intended for a single trusted user. Model files are executable XL code.
 
+### Upgrading an existing workspace
+
+Rebuild the API, worker, and frontend images with `docker compose build`, then start them with `docker compose up -d`. Existing installations show **Upgrade model adapter** in the browser. The upgrade preserves the saved experiment, migrates its exact legacy planting pattern, backs up the previous installation, and keeps the original upstream backup. Unsaved browser edits remain available after upgrade. Modified managed adapter sources are refused rather than overwritten; reconcile those edits before upgrading. Existing run snapshots and downloadable artifacts are not rewritten.
+
+Version 2 adds `planting` (explicit placements, generator settings, stable reporting IDs), `groups` (flat member IDs), `parameter_overrides`, and `temperature_overrides` (zero-based day keys). Version 1 configurations remain readable. Limits are 100 enabled central plants, 1,000 enabled border clones, and 200 environment objects. Border clones use the first enabled central plant.
+
 ### API endpoints
 
-`GET /api/health`, `GET /api/config`, `POST /api/setup`, `PUT /api/config` (`{revision, config}`), `GET/POST /api/runs` (create: `{revision, name}`), `GET /api/runs/{id}`, `POST /api/runs/{id}/cancel`, `GET /api/runs/{id}/events` (SSE), `/metrics`, `/logs`, and `/artifacts/{path}`. A save or run with a stale revision returns 409. Invalid configuration returns 422; unavailable GPU execution returns 503. Interrupted jobs become failed on worker restart; completed daily outputs stay available.
+`GET /api/health`, `GET /api/config`, `POST /api/setup`, `PUT /api/config` (`{revision, config}`), `GET/POST /api/runs` (create: `{revision, name}`), `GET /api/runs/{id}`, `POST /api/runs/{id}/cancel`, `GET /api/runs/{id}/events` (SSE), `/metrics`, `/logs`, and `/artifacts/{path}`. A save or run with a stale revision returns 409. `GET /api/config` also reports `adapter.version`, `required_version`, `compatible`, and `upgrade_available`. `POST /api/setup` installs or upgrades the adapter. Read-only `POST /api/inputs/preview` accepts `{plant_input, temperature_input}` and returns parameter definitions/source values, daily temperatures, and the source revision. Read-only `POST /api/layout/preview` accepts `{simulation, room, pattern, plant_spacing, row_spacing, center, rotation}` and returns resolved planting data; null spacing derives from density.
+
+Invalid configuration returns 422; unavailable GPU execution returns 503. Interrupted jobs become failed on worker restart; completed daily outputs stay available.
 
 ## Deploy on a server
 
@@ -108,6 +120,8 @@ docker compose run --rm --no-deps \
   -v "$(cd model/model && pwd):/reference:ro" \
   worker python -m autotom.smoke
 ```
+
+For version-1 upgrade and explicit-layout GPU checks, use the same isolated mounts with `python -m autotom.features_smoke` and a **fresh** check directory. This runs two-day migrated and custom staggered experiments, including moved border clones, nonsequential reporting IDs, parameter overrides, and daily temperatures.
 
 For native-grid comparison, repeated-seed sampling checks, moved-lamp and opaque-panel tests, run the same command with `python -m autotom.acceptance` and a separate check directory. These checks copy and restore pristine sources from the adapter backup when necessary; they never modify the host model.
 

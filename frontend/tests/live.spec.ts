@@ -23,3 +23,27 @@ test('real saved 80-day GroIMP run loads geometry, materials, charts and survive
   await expect(page.locator('.scene-message')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+test('restoring an older saved run stays visible after live updates and reload', async ({ page, request }) => {
+  test.skip(process.env.LIVE !== '1', 'Enable LIVE=1 for read-only checks against the running application');
+  const response = await request.get('/api/runs');
+  expect(response.ok()).toBeTruthy();
+  const runs = await response.json() as { id: string; status: string }[];
+  const run = runs.find(r => ['completed', 'failed', 'cancelled'].includes(r.status));
+  expect(run).toBeTruthy();
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(id => localStorage.setItem('autotom-selected-run', id), run!.id);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const eventResponse = page.waitForResponse(r => r.url().endsWith(`/api/runs/${run!.id}/events`));
+    if (attempt === 0) await page.goto('/');
+    else await page.reload();
+    const event = await eventResponse;
+    expect(event.ok()).toBeTruthy();
+    await event.finished();
+    await expect(page.getByRole('heading', { name: 'Simulation workspace', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Simulation result', exact: true })).toHaveClass('active');
+    await expect(page.locator('.run-progress')).toBeVisible();
+    expect(errors).toEqual([]);
+  }
+});

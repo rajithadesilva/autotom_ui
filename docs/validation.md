@@ -10,6 +10,15 @@ The application was built and run entirely in Docker on an NVIDIA GeForce RTX 40
 
 The normal browser suite isolates editor behavior with mocked HTTP responses. The additional `LIVE=1` test reads a real saved run and loads its actual GroIMP geometry and metrics.
 
+## Expanded editor validation — 19 October 2026
+
+- **50 backend checks:** includes version-1 migration with legacy border order and ID collisions, adapter upgrade/refusal/rollback, unchanged source CSVs, effective inputs and temperature coverage, typed preview APIs, invalid request handling, explicit scene validation, immutable snapshots, save rollback, and consistent migration of historical runs in HTTP and live-event responses.
+- **16 frontend checks:** browser interactions and transform mathematics cover mixed groups, membership and reload persistence, numeric and actual gizmo movement, rotations and offsets, box selection of individual member origins, cancellation with Escape, undo/redo transactions, coefficient precision, parameter and temperature resets, layout generation, stable reporting IDs, result edit protection, and mobile layout. The optional saved day-80 live test remains opt-in.
+- A read-only browser check against the running application verifies restoration of an older saved run, receipt of live updates, and reload without a blank screen or JavaScript exceptions. The regression also checks that historical stored configuration and snapshot bytes remain unchanged.
+- Production API, worker, and frontend Docker images build successfully. The existing Three.js chunk-size advisory remains.
+- Three isolated GPU experiments completed: a two-day one-plant smoke run; a two-day migrated 2×2 layout with border clones; and a two-day custom staggered layout with moved central/border items, elevated plants, nonsequential reporting IDs, raw architecture overrides, ray-depth/rockwool overrides, and daily-temperature overrides. All days exported geometry and finite positive plant growth metrics; border clones were excluded from reporting.
+- Feature checks use disposable data directories and read-only reference mounts. Reproduce the two layout scenarios with `python -m autotom.features_smoke` using the isolated GPU-check mounts documented in the README and a fresh data directory.
+
 ## Real NVIDIA runs
 
 | Check | Settings | Result |

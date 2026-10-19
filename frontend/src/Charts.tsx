@@ -11,8 +11,8 @@ const measures = [
   { key: 'carbon_mmol_day', title: 'Carbon assimilation', unit: 'mmol CO₂/day', color: '#b4b3e2' },
 ] as const;
 
-export default function Charts({ data, day, plant, onPlant, onDay }: {
-  data: DailyResult[]; day: number; plant: string; onPlant: (p: string) => void; onDay: (n: number) => void;
+export default function Charts({ names, data, day, plant, onPlant, onDay }: {
+  names: Record<string,string>; data: DailyResult[]; day: number; plant: string; onPlant: (p: string) => void; onDay: (n: number) => void;
 }) {
   const rows = useMemo(() => data.map(result => {
     const plants = plant === 'mean' ? result.plants : result.plants.filter(p => p.plant === Number(plant));
@@ -25,7 +25,7 @@ export default function Charts({ data, day, plant, onPlant, onDay }: {
   return <section className="results-section" aria-label="Daily simulation charts">
     <div className="section-heading"><div><span className="eyebrow">DAILY OBSERVATIONS</span><h2>Growth & performance</h2></div>
       <label className="plant-select">Reporting<select aria-label="Plant reporting" value={plant} onChange={e => onPlant(e.target.value)}>
-        <option value="mean">Mean per simulated plant</option>{ids.map(id => <option key={id} value={id}>Plant {id}</option>)}</select></label></div>
+        <option value="mean">Mean per simulated plant</option>{ids.map(id => <option key={id} value={id}>{names[id]||`Plant ${id}`}</option>)}</select></label></div>
     {!data.length ? <div className="empty-charts"><Activity size={25} /><div><h3>Your simulation data will appear here</h3>
       <p>Run the model to see daily growth, light interception, and carbon assimilation.</p></div></div> : <div className="chart-grid">
       {measures.map(measure => <article className="chart-card" key={measure.key}>

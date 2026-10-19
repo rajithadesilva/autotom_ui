@@ -3,7 +3,7 @@ import json
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from .adapter import Conflict, GENERATED_FILES, ModelError, atomic_write, install, read_config, revision, validate_inputs, write_config
+from .adapter import Conflict, GENERATED_FILES, ModelError, atomic_write, adapter_status, install, read_config, revision, validate_inputs, write_config
 from .store import Store, run_id
 
 
@@ -31,23 +31,27 @@ class Project:
             installed = (self.model / ".autotom-adapter.json").exists()
             inputs = {folder: sorted(p.name for p in (self.model / "input" / folder).glob("*.csv"))
                       for folder in ("dynamic_input", "temperature", "light_spectrum", "light_emission_pattern")}
-            return {"config": config.model_dump(), "revision": rev, "installed": installed, "inputs": inputs}
+            inputs = {folder: [name for name in names if not name.startswith("autotom_effective_")] for folder, names in inputs.items()}
+            return {"config": config.model_dump(), "revision": rev, "installed": installed, "inputs": inputs, "adapter": adapter_status(self.model)}
 
     def assert_revision(self, expected):
         if revision(self.model) != expected:
             raise Conflict("Model files changed outside this editor. Reload the configuration before saving or running.")
-        if not (self.model / ".autotom-adapter.json").exists():
-            raise ModelError("Install the model adapter before saving or running")
+        if not adapter_status(self.model)["compatible"]:
+            raise ModelError("Install or upgrade the model adapter before saving or running")
 
     def save(self, expected, config):
         with self.locked():
             self.assert_revision(expected)
-            originals = {name: (self.model / name).read_bytes() for name in GENERATED_FILES}
+            originals = {name: (self.model / name).read_bytes() if (self.model / name).exists() else None for name in GENERATED_FILES}
             try:
                 write_config(self.model, config)
             except Exception:
                 for name, content in originals.items():
-                    atomic_write(self.model / name, content)
+                    if content is None:
+                        (self.model / name).unlink(missing_ok=True)
+                    else:
+                        atomic_write(self.model / name, content)
                 raise
         return self.read()
 
@@ -68,7 +72,7 @@ class Project:
                     raise Conflict("Model files changed while taking the run snapshot. Reload and try again.")
                 atomic_write(pending / "config.json", config.model_dump_json(indent=2))
                 atomic_write(pending / "provenance.json", json.dumps({"source_revision": expected,
-                    "adapter_version": 1, "groimp": "2.2", "java": "21", "coordinates": "Z-up, metres, Euler XYZ degrees"}, indent=2))
+                    "adapter_version": 2, "groimp": "2.2", "java": "21", "coordinates": "Z-up, metres, Euler XYZ degrees"}, indent=2))
                 pending.rename(final)
                 return self.store.create(identifier, name, expected, config)
         except Exception:

@@ -5,6 +5,8 @@ import shutil
 from pathlib import Path
 from .adapter import PATCHED_FILES, install, read_config, revision, write_config
 from .project import Project
+from .layout import generate_layout
+from .schema import Planting
 from .store import Store
 from .worker import DATA, execute, gpu_check
 
@@ -37,6 +39,7 @@ def main():
     config.simulation.rows = config.simulation.plants_per_row = 1
     config.simulation.border_rows = config.simulation.border_plants = 0
     config.simulation.rays = 200000
+    config.planting = Planting.model_validate(generate_layout(config.simulation.model_dump(), config.room.model_dump(), legacy=True))
     write_config(model, config)
     run = Project(model, store).create_run(revision(model), "GPU acceptance smoke")
     run = store.claim()

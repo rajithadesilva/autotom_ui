@@ -1,19 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownToLine, Box, Check, ChevronRight, CircleStop, Clock3, Code2, Layers3, Leaf, Lightbulb, LoaderCircle, Move3D, Pause, Play, Rotate3D, Save, Settings2, Sprout, Terminal, X } from 'lucide-react';
+import { ArrowDownToLine, Box, Check, ChevronRight, CircleStop, Clock3, Code2, Layers3, Leaf, Lightbulb, LoaderCircle, Move3D, Undo2, Redo2, Scan, Pause, Play, Rotate3D, Save, Settings2, Sprout, Terminal, X } from 'lucide-react';
 import Scene from './Scene';
 import Inspector, { type Pane } from './Inspector';
+import useHistory from './useHistory';
+import SceneList from './SceneList';
+import { itemsOf, isPlant, applyPoses, sceneError, type Pose } from './editor';
 import Charts from './Charts';
 import { api, artifactUrl, type Config, type ConfigResponse, type DailyResult, type Health, type Run, type Vec3 } from './types';
 
 export default function App() {
   const [project, setProject] = useState<ConfigResponse | null>(null);
-  const [config, setConfig] = useState<Config | null>(null);
+  const history = useHistory();
+  const config = history.value;
+  const setConfig = history.set;
   const [runs, setRuns] = useState<Run[]>([]);
   const [run, setRun] = useState<Run | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [pane, setPane] = useState<Pane | null>('lights');
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
   const [view, setView] = useState<'preview' | 'result'>('preview');
+  const [pivot,setPivot] = useState<Vec3 | undefined>();
+  const updatePivot=useCallback((next:Vec3)=>setPivot(current=>current&&current.every((n,i)=>Math.abs(n-next[i])<1e-10)?current:next),[]);
+  const [tool,setTool] = useState<'orbit'|'box'>('orbit');
   const [mode, setMode] = useState<'translate' | 'rotate'>('translate');
   const [day, setDay] = useState(1);
   const [playing, setPlaying] = useState(false);
@@ -34,7 +42,7 @@ export default function App() {
 
   const loadProject = useCallback(async () => {
     const p = await api<ConfigResponse>('/config');
-    setProject(p); setConfig(p.config); setSelected(null); setError('');
+    setProject(p); history.reset(p.config); setSelected([]); setError('');
     return p;
   }, []);
 
@@ -105,7 +113,7 @@ export default function App() {
   }
   async function save(): Promise<ConfigResponse> {
     const p = await api<ConfigResponse>('/config', { method: 'PUT', body: JSON.stringify({ revision: project!.revision, config }) });
-    setProject(p); setConfig(p.config); return p;
+    setProject(p); history.sync(p.config); return p;
   }
   function selectRun(id: string) {
     action(async () => {
@@ -114,39 +122,66 @@ export default function App() {
       setRun(next); setData([]); setDay(next.available_days?.at(-1) || 1); setPlant('mean'); setPlaying(false); setView('result');
     });
   }
-  const selectObject = useCallback((id: string | null) => {
-    setSelected(id);
-    if (id) {
-      const object = config?.objects.find(o => o.id === id);
-      if (object) setPane(object.kind === 'led' ? 'lights' : 'surroundings');
-    }
+  function changeConfig(next: Config) {
+    const message=sceneError(next);
+    if(message) {setError(message);return;}
+    setError('');setConfig(next);
+  }
+  const selectObjects = useCallback((ids: string[], additive=false) => {
+    setSelected(previous=>additive ? ids.reduce((next,id)=>next.includes(id)?next.filter(i=>i!==id):[...next,id],previous) : ids);
+    if(ids.length===1) {
+      const item=config&&itemsOf(config).find(i=>i.id===ids[0]);
+      if(item) setPane(isPlant(item)?'plants':item.kind==='led'?'lights':'surroundings');
+    } else if(ids.length>1) setPane(current=>current==='parameters'||current==='simulation'||!current?'surroundings':current);
   }, [config]);
-  const transformObject = useCallback((id: string, position: Vec3, rotation: Vec3) => {
-    setConfig(current => current && ({ ...current, objects: current.objects.map(o => o.id === id ? { ...o, position, rotation } : o) }));
-  }, []);
+  function selectScene(ids:string[],additive=false,expandGroups=true) {
+    const expanded=expandGroups?[...new Set(ids.flatMap(id=>config?.groups.find(g=>g.members.includes(id))?.members||[id]))]:ids;
+    selectObjects(expanded,additive);
+  }
+  function transformObjects(poses: Pose[]) {
+    if(config) {const next=applyPoses(config,poses);const message=sceneError(next);if(message) {setError(message);history.sync({...config});} else changeConfig(next);}
+  }
+  useEffect(()=>{
+    if(!config)return;
+    const ids=new Set(itemsOf(config).map(i=>i.id));
+    setSelected(previous=>previous.every(id=>ids.has(id))?previous:previous.filter(id=>ids.has(id)));
+  },[config]);
+  useEffect(()=>{
+    function key(event:KeyboardEvent) {
+      if((event.target as HTMLElement)?.closest('input,textarea,select,[contenteditable="true"]'))return;
+      if(event.key==='Escape') {setSelected([]);setTool('orbit');}
+      if(view!=='preview')return;
+      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z') {event.preventDefault();event.shiftKey?history.redo():history.undo();}
+      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='y') {event.preventDefault();history.redo();}
+    }
+    window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);
+  },[view]);
 
   if (!config || !project) return <div className="loading-screen"><Sprout size={40} /><h1>AutoTom</h1>
     {error ? <><p role="alert">{error}</p><button className="button" onClick={() => loadProject().catch(e => setError(e.message))}>Retry connection</button></> : <p>Opening your simulation workspace…</p>}</div>;
 
   const displayConfig = view === 'result' && run ? run.config : config;
-  return <div className="app-shell">
+  return <div className="app-shell" onFocusCapture={e=>{if((e.target as HTMLElement).matches('input,select,textarea'))history.begin();}}
+    onBlurCapture={e=>{if((e.target as HTMLElement).matches('input,select,textarea'))history.end();}}
+    onPointerDownCapture={e=>{if((e.target as HTMLElement).closest('.spectrum,input[type="range"]'))history.begin();}}
+    onPointerUpCapture={e=>{if((e.target as HTMLElement).closest('.spectrum,input[type="range"]'))history.end();}} onPointerCancelCapture={()=>history.end()}>
     <header className="topbar"><a className="brand" href="/" aria-label="AutoTom home"><div className="brand-mark"><Sprout size={24} /></div><span>AutoTom<span className="brand-tag">GROWTH LAB</span></span></a>
       <div className="breadcrumb">Workspace <ChevronRight size={12} /><span>Dwarf tomato</span></div>
       <div className="topbar-right"><span className={`connection ${health?.worker.ready ? '' : 'offline'}`} title={health?.worker.gpu || health?.worker.error || undefined}><span className="status-dot" />{health?.worker.ready ? 'NVIDIA connected' : 'GPU unavailable'}</span>
-        <button className="button save-button" disabled={busy || !project.installed || !dirty} onClick={() => action(async () => { await save(); setNotice('Configuration saved to host model files.'); })}><Save size={15} />{dirty ? 'Save changes' : 'Saved'}</button></div>
+        <button className="button save-button" disabled={busy || (!project.installed || project.adapter?.compatible===false) || !dirty} onClick={() => action(async () => { await save(); setNotice('Configuration saved to host model files.'); })}><Save size={15} />{dirty ? 'Save changes' : 'Saved'}</button></div>
     </header>
 
     {(error || notice) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || notice}</span>
       <div>{error.includes('Reload') || error.includes('changed') ? <button onClick={() => action(async () => { await loadProject(); setNotice('Reloaded configuration from host files.'); })}>Reload host files</button> : null}
         <button className="icon-button" aria-label="Dismiss notification" onClick={() => { setError(''); setNotice(''); }}><X size={16} /></button></div></div>}
-    {!project.installed && <div className="setup-banner"><Code2 size={18} /><div><strong>Connect your GroIMP model</strong><span>Install the adapter to enable scene editing and daily exports. Original files are backed up in your host model folder.</span></div>
-      <button className="button primary" disabled={busy} onClick={() => action(async () => { const p = await api<ConfigResponse>('/setup', { method: 'POST' }); setProject(p); setConfig(p.config); setNotice('Model adapter installed. Original files are backed up.'); })}>Install model adapter</button></div>}
+    {(!project.installed || project.adapter?.upgrade_available) && <div className="setup-banner"><Code2 size={18} /><div><strong>{project.installed?'Upgrade your model adapter':'Connect your GroIMP model'}</strong><span>Install the adapter to enable scene editing and daily exports. Original files are backed up in your host model folder.</span></div>
+      <button className="button primary" disabled={busy} onClick={() => action(async () => { const p = await api<ConfigResponse>('/setup', { method: 'POST' }); setProject(p); if(dirty) history.sync(config); else history.reset(p.config); setNotice('Model adapter installed. Original files are backed up.'); })}>{project.installed?'Upgrade model adapter':'Install model adapter'}</button></div>}
 
     <div className="workspace-heading"><div><span className="eyebrow">FUNCTIONAL–STRUCTURAL PLANT MODEL</span><h1>Simulation workspace</h1><p>Shape the environment. Explore how your plants grow.</p>
       <select className="compact-run-select" aria-label="Saved runs" value={run?.id || ''} onChange={e => { if (e.target.value) selectRun(e.target.value); }}>
         <option value="">Select a saved run</option>{runs.map(r => <option key={r.id} value={r.id}>{r.name} · {r.status}</option>)}</select></div>
       <div className="run-controls"><input aria-label="Run name" className="run-name" value={runName} maxLength={100} onChange={e => setRunName(e.target.value)} />
-        <button className="button primary run-button" disabled={busy || !project.installed || !health?.worker.ready} onClick={() => action(async () => {
+        <button className="button primary run-button" disabled={busy || (!project.installed || project.adapter?.compatible===false) || !health?.worker.ready} onClick={() => action(async () => {
           const p = dirty ? await save() : project;
           const next = await api<Run>('/runs', { method: 'POST', body: JSON.stringify({ revision: p.revision, name: runName || 'Tomato simulation' }) });
           localStorage.setItem('autotom-selected-run', next.id);
@@ -155,11 +190,8 @@ export default function App() {
         })}>{busy ? <LoaderCircle size={16} className="spin" /> : <Play size={15} fill="currentColor" />}Run simulation</button></div></div>
 
     <div className={`workspace ${pane ? 'with-inspector' : ''}`}>
-      <aside className="left-sidebar"><div className="sidebar-section"><div className="sidebar-title"><Layers3 size={14} /><h2>Scene objects</h2><span>{config.objects.length}</span></div>
-        <div className="object-list">{config.objects.map(o => <button key={o.id} className={`object-row ${selected === o.id && view === 'preview' ? 'selected' : ''} ${!o.enabled ? 'disabled-object' : ''}`}
-          onClick={() => { setView('preview'); selectObject(o.id); }}><span className={`object-icon ${o.kind}`}>{o.kind === 'led' ? <Lightbulb size={14} /> : <Box size={14} />}</span>
-          <span>{o.name}</span><span className="object-type">{o.kind === 'led' ? 'LED' : o.kind}</span></button>)}
-          {!config.objects.length && <p className="hint">Add lamps and surroundings from the configuration panes.</p>}</div></div>
+      <aside className="left-sidebar"><div className="sidebar-section"><div className="sidebar-title"><Layers3 size={14} /><h2>Scene objects</h2><span>{itemsOf(config).length}</span></div>
+        <SceneList config={config} selected={selected} onSelect={(ids,additive)=>{setView('preview');selectObjects(ids,additive);}} /></div>
         <div className="sidebar-section runs-sidebar"><div className="sidebar-title"><Clock3 size={14} /><h2>Saved runs</h2><span>{runs.length}</span></div>
           {!runs.length ? <div className="no-runs"><Sprout size={24} /><p>No simulations yet</p><span>Your runs stay here after restarting Docker.</span></div> : <div className="run-list">{runs.map(r => <button key={r.id} className={`run-row ${run?.id === r.id ? 'selected' : ''}`} onClick={() => selectRun(r.id)}>
             <span className={`run-status-dot ${r.status}`} /><div><strong>{r.name}</strong><span>{new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · {r.current_day}/{r.days} days</span></div>
@@ -170,13 +202,16 @@ export default function App() {
 
       <main className="main-panel"><div className="viewport-topbar"><div className="view-tabs"><button className={view === 'preview' ? 'active' : ''} onClick={() => setView('preview')}>Scene editor</button>
         <button className={view === 'result' ? 'active' : ''} disabled={!run} onClick={() => setView('result')}>Simulation result</button></div>
-        <div className="config-buttons">{([['lights', Lightbulb, 'Lights'], ['surroundings', Box, 'Surroundings'], ['simulation', Settings2, 'Simulation']] as const).map(([key, Icon, label]) =>
+        <div className="config-buttons">{([['lights', Lightbulb, 'Lights'], ['surroundings', Box, 'Surroundings'], ['plants', Sprout, 'Plants'], ['parameters', Leaf, 'Model parameters'], ['simulation', Settings2, 'Simulation']] as const).map(([key, Icon, label]) =>
           <button key={key} aria-label={label} title={label} className={`config-button ${pane === key ? 'active' : ''}`} onClick={() => { setPane(pane === key ? null : key); if (pane !== key) setView('preview'); }}><Icon size={14} /><span>{label}</span></button>)}</div></div>
-        <div className="viewport"><Scene config={displayConfig} selected={selected} mode={mode} result={hasResult && run ? { run: run.id, day } : null} showRoom={showRoom} onSelect={selectObject} onTransform={transformObject} />
+        <div className="viewport"><Scene config={displayConfig} selected={selected} mode={mode} tool={tool} readOnly={view==='result'} result={hasResult && run ? { run: run.id, day } : null} showRoom={showRoom} onSelect={selectScene} onTransform={transformObjects} onPivot={updatePivot} />
           <div className="viewport-label"><span className="status-dot" />{hasResult ? `SIMULATION · DAY ${day}` : view === 'result' && run ? 'AWAITING DAILY OUTPUT' : 'ENVIRONMENT PREVIEW'}
-            <small>{hasResult ? run?.name : `${config.simulation.rows * config.simulation.plants_per_row} central plants · Z-up`}</small></div>
-          {view === 'preview' && <div className="viewport-tools"><button className={mode === 'translate' ? 'active' : ''} aria-label="Translate selected object" title="Move object" onClick={() => setMode('translate')}><Move3D size={17} /></button>
-            <button className={mode === 'rotate' ? 'active' : ''} aria-label="Rotate selected object" title="Rotate object" onClick={() => setMode('rotate')}><Rotate3D size={17} /></button></div>}
+            <small>{hasResult ? run?.name : `${config.planting.plants.filter(p=>p.enabled&&p.role==='central').length} central plants · Z-up`}</small></div>
+          {view === 'preview' && <div className="viewport-tools"><button className={mode === 'translate' ? 'active' : ''} aria-label="Translate selection" title="Move object" onClick={() => {setTool('orbit');setMode('translate');}}><Move3D size={17} /></button>
+            <button className={mode === 'rotate' ? 'active' : ''} aria-label="Rotate selection" title="Rotate object" onClick={() => {setTool('orbit');setMode('rotate');}}><Rotate3D size={17} /></button>
+            <button className={tool==='box'?'active':''} aria-label="Box selection" title="Box selection" onClick={()=>setTool(tool==='box'?'orbit':'box')}><Scan size={17}/></button>
+            <button aria-label="Undo" title="Undo (Ctrl/Cmd Z)" disabled={!history.canUndo} onClick={history.undo}><Undo2 size={17}/></button>
+            <button aria-label="Redo" title="Redo (Ctrl/Cmd Shift Z)" disabled={!history.canRedo} onClick={history.redo}><Redo2 size={17}/></button></div>}
           <div className="viewport-legend"><span className="legend-dot plants" />{hasResult ? 'Simulated plants' : 'Plant positions'}<span className="legend-dot lamps" />LED emitters</div>
           <label className="room-toggle"><input type="checkbox" checked={showRoom} onChange={e => setShowRoom(e.target.checked)} />Room outline</label>
         </div>
@@ -194,9 +229,9 @@ export default function App() {
           {run.raw_available && <a className="text-button" href={artifactUrl(run.id, 'raw.zip')} download><ArrowDownToLine size={13} />CSV</a>}</div>}
         {run?.error && <div className="run-error" role="alert">{run.error}<button className="text-button" onClick={() => setLogOpen(true)}>Open log</button></div>}
       </main>
-      {pane && <Inspector pane={pane} config={config} selected={selected} inputs={project.inputs} onChange={setConfig} onSelect={selectObject} onClose={() => setPane(null)} />}
+      {pane && <div className={`inspector-wrapper ${view==='result'?'read-only':''}`}><fieldset disabled={view==='result'}><Inspector key={pane} pane={pane} config={config} pivot={pivot} revision={project.revision} selected={selected} inputs={project.inputs} onChange={changeConfig} onSelect={ids=>selectObjects(ids)} onClose={() => setPane(null)} /></fieldset></div>}
     </div>
-    <Charts data={data} day={day} plant={plant} onPlant={setPlant} onDay={n => { if (days.includes(n)) { setDay(n); setView('result'); setPlaying(false); } }} />
+    <Charts names={Object.fromEntries((run?.config.planting?.plants||[]).filter(p=>p.role==='central').map(p=>[p.reporting_id,p.name]))} data={data} day={day} plant={plant} onPlant={setPlant} onDay={n => { if (days.includes(n)) { setDay(n); setView('result'); setPlaying(false); } }} />
     <footer className="page-footer"><span><span className="status-dot" /> Host files persist outside Docker</span><span>Results use saved run snapshots · {hasResult ? 'Real GroIMP output' : 'Editor preview'}</span></footer>
     {logOpen && <div className="modal-backdrop" onClick={() => setLogOpen(false)}><section role="dialog" aria-modal="true" aria-label="Simulation log" className="log-modal" onClick={e => e.stopPropagation()}>
       <header><div><Terminal size={18} /><h2>Simulation log</h2></div><button className="icon-button" aria-label="Close simulation log" onClick={() => setLogOpen(false)}><X size={20} /></button></header>
