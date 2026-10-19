@@ -199,9 +199,23 @@ class SaveConfiguration(StrictModel):
     config: Configuration
 
 
+class CreateSavedConfiguration(StrictModel):
+    name: str = Field(min_length=1, max_length=100, pattern=r"\S")
+    config: Configuration
+
+
+class SavedConfiguration(CreateSavedConfiguration):
+    id: str
+    created_at: str
+
+
 class CreateRun(StrictModel):
     revision: str
     name: str = Field(default="Tomato simulation", min_length=1, max_length=100)
+
+
+class RenameRun(StrictModel):
+    name: str = Field(min_length=1, max_length=100, pattern=r"\S")
 
 
 class Metric(StrictModel):

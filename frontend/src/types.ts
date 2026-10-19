@@ -31,6 +31,7 @@ export type Parameter = { key: string; label: string; type: 'number' | 'integer'
   unit: string; description?: string; min?: number; max?: number; length?: number; value: number | boolean | number[] };
 export type InputPreview = { parameters: Parameter[]; temperatures: number[]; revision: string };
 export type ConfigResponse = { config: Config; revision: string; installed: boolean; inputs: Record<string, string[]>; adapter?: { version: number | null; required_version: number; compatible: boolean; upgrade_available: boolean } };
+export type SavedConfiguration = { id: string; name: string; created_at: string; config: Config };
 export type Run = {
   id: string; name: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   created_at: string; started_at: string | null; finished_at: string | null;
@@ -57,5 +58,5 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
     } catch { /* Preserve HTTP status for non-JSON errors. */ }
     throw new Error(message);
   }
-  return response.json() as Promise<T>;
+  return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }

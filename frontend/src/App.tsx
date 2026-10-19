@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownToLine, Box, Check, ChevronRight, CircleStop, Clock3, Code2, Layers3, Leaf, Lightbulb, LoaderCircle, Move3D, Undo2, Redo2, Scan, Pause, Play, Rotate3D, Save, Settings2, Sprout, Terminal, X } from 'lucide-react';
+import { ArrowDownToLine, Box, Check, ChevronRight, CircleStop, Clock3, Code2, Layers3, Leaf, Lightbulb, LoaderCircle, Move3D, Undo2, Redo2, Scan, Pause, Play, Plus, Rotate3D, Save, Settings2, Sprout, Terminal, Trash2, X } from 'lucide-react';
 import Scene from './Scene';
 import Inspector, { type Pane } from './Inspector';
 import useHistory from './useHistory';
 import SceneList from './SceneList';
+import RunMenu from './RunMenu';
 import { itemsOf, isPlant, applyPoses, sceneError, type Pose } from './editor';
 import Charts from './Charts';
-import { api, artifactUrl, type Config, type ConfigResponse, type DailyResult, type Health, type Run, type Vec3 } from './types';
+import Compare from './Compare';
+import { api, artifactUrl, type Config, type ConfigResponse, type DailyResult, type Health, type Run, type SavedConfiguration, type Vec3 } from './types';
 
 export default function App() {
   const [project, setProject] = useState<ConfigResponse | null>(null);
@@ -18,7 +20,8 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [pane, setPane] = useState<Pane | null>('lights');
   const [selected, setSelected] = useState<string[]>([]);
-  const [view, setView] = useState<'preview' | 'result'>('preview');
+  const [view, setView] = useState<'preview' | 'result' | 'compare'>('preview');
+  const [comparison, setComparison] = useState<[string, string]>(['', '']);
   const [pivot,setPivot] = useState<Vec3 | undefined>();
   const updatePivot=useCallback((next:Vec3)=>setPivot(current=>current&&current.every((n,i)=>Math.abs(n-next[i])<1e-10)?current:next),[]);
   const [tool,setTool] = useState<'orbit'|'box'>('orbit');
@@ -34,6 +37,11 @@ export default function App() {
   const [logOpen, setLogOpen] = useState(false);
   const [logs, setLogs] = useState('');
   const [runName, setRunName] = useState('Tomato growth experiment');
+  const [renamingRun, setRenamingRun] = useState<Run | null>(null);
+  const [renamedName, setRenamedName] = useState('');
+  const [savedConfigurations, setSavedConfigurations] = useState<SavedConfiguration[]>([]);
+  const [configurationId, setConfigurationId] = useState('');
+  const [configurationName, setConfigurationName] = useState('');
   const restored = useRef(false);
   const dirty = Boolean(config && project && JSON.stringify(config) !== JSON.stringify(project.config));
   const days = run?.available_days || [];
@@ -42,12 +50,13 @@ export default function App() {
 
   const loadProject = useCallback(async () => {
     const p = await api<ConfigResponse>('/config');
-    setProject(p); history.reset(p.config); setSelected([]); setError('');
+    setProject(p); history.reset(p.config); setSelected([]); setConfigurationId(''); setError('');
     return p;
   }, []);
 
   useEffect(() => {
     loadProject().catch(e => setError(e.message));
+    api<SavedConfiguration[]>('/configurations').then(setSavedConfigurations).catch(e => setError(e.message));
     async function refresh() {
       try {
         const [h, r] = await Promise.all([api<Health>('/health'), api<Run[]>('/runs')]);
@@ -69,14 +78,16 @@ export default function App() {
   useEffect(() => {
     if (!run?.id) return;
     const source = new EventSource(`/api/runs/${run.id}/events`);
+    let active = true;
     source.onmessage = event => {
+      if (!active) return;
       const next: Run = JSON.parse(event.data);
       setRun(next);
       if (['completed', 'failed', 'cancelled'].includes(next.status)) source.close();
       setDay(value => next.available_days?.includes(value) ? value : next.available_days?.[0] || 1);
     };
     source.onerror = () => { /* EventSource reconnects automatically; HTTP polling updates worker health. */ };
-    return () => source.close();
+    return () => { active = false; source.close(); };
   }, [run?.id]);
 
   useEffect(() => {
@@ -111,8 +122,8 @@ export default function App() {
     try { await fn(); } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
-  async function save(): Promise<ConfigResponse> {
-    const p = await api<ConfigResponse>('/config', { method: 'PUT', body: JSON.stringify({ revision: project!.revision, config }) });
+  async function save(nextConfig = config): Promise<ConfigResponse> {
+    const p = await api<ConfigResponse>('/config', { method: 'PUT', body: JSON.stringify({ revision: project!.revision, config: nextConfig }) });
     setProject(p); history.sync(p.config); return p;
   }
   function selectRun(id: string) {
@@ -120,6 +131,39 @@ export default function App() {
       const next = await api<Run>(`/runs/${id}`);
       localStorage.setItem('autotom-selected-run', id);
       setRun(next); setData([]); setDay(next.available_days?.at(-1) || 1); setPlant('mean'); setPlaying(false); setView('result');
+    });
+  }
+  function clearRun() {
+    localStorage.removeItem('autotom-selected-run');
+    setRun(null); setData([]); setDay(1); setPlant('mean'); setPlaying(false); setView('preview'); setLogOpen(false); setLogs('');
+  }
+  function selectConfiguration(id: string) {
+    if (!id) { setConfigurationId(''); return; }
+    action(async () => {
+      const saved = await api<SavedConfiguration>(`/configurations/${id}`);
+      history.set(saved.config); setSelected([]); clearRun();
+      setConfigurationId(id); setConfigurationName(saved.name);
+      setNotice(`Loaded “${saved.name}” into the editor. You can undo this change or start a simulation.`);
+    });
+  }
+  function newRun() {
+    if (view === 'result' && run) {
+      history.set(run.config); setConfigurationId('');
+    }
+    clearRun(); setSelected([]); setRunName('Tomato growth experiment'); setError('');
+    setNotice('New run ready. Adjust the configuration and run name, then choose Run simulation.');
+  }
+  function beginRename(target: Run) {
+    setRenamingRun(target); setRenamedName(target.name);
+  }
+  function deleteRun(target: Run) {
+    if (!window.confirm(`Delete “${target.name}” and all its results? This cannot be undone.`)) return;
+    const id = target.id;
+    action(async () => {
+      await api<void>(`/runs/${id}`, { method: 'DELETE' });
+      setRuns(current => current.filter(item => item.id !== id));
+      if (run?.id === id) clearRun();
+      setNotice('Run and its results deleted.');
     });
   }
   function changeConfig(next: Config) {
@@ -178,32 +222,59 @@ export default function App() {
       <button className="button primary" disabled={busy} onClick={() => action(async () => { const p = await api<ConfigResponse>('/setup', { method: 'POST' }); setProject(p); if(dirty) history.sync(config); else history.reset(p.config); setNotice('Model adapter installed. Original files are backed up.'); })}>{project.installed?'Upgrade model adapter':'Install model adapter'}</button></div>}
 
     <div className="workspace-heading"><div><span className="eyebrow">FUNCTIONAL–STRUCTURAL PLANT MODEL</span><h1>Simulation workspace</h1><p>Shape the environment. Explore how your plants grow.</p>
-      <select className="compact-run-select" aria-label="Saved runs" value={run?.id || ''} onChange={e => { if (e.target.value) selectRun(e.target.value); }}>
-        <option value="">Select a saved run</option>{runs.map(r => <option key={r.id} value={r.id}>{r.name} · {r.status}</option>)}</select></div>
+      <div className="compact-run-picker"><select className="compact-run-select" aria-label="Saved runs" disabled={busy} value={run?.id || ''} onChange={e => { if (e.target.value) selectRun(e.target.value); }}>
+        <option value="">Select a saved run</option>{runs.map(r => <option key={r.id} value={r.id}>{r.name} · {r.status}</option>)}</select>
+        {run && <RunMenu run={run} busy={busy} onRename={beginRename} onDelete={deleteRun} />}</div></div>
       <div className="run-controls"><input aria-label="Run name" className="run-name" value={runName} maxLength={100} onChange={e => setRunName(e.target.value)} />
+        <button className="button" disabled={busy} onClick={newRun}><Plus size={15} />New run</button>
         <button className="button primary run-button" disabled={busy || (!project.installed || project.adapter?.compatible===false) || !health?.worker.ready} onClick={() => action(async () => {
-          const p = dirty ? await save() : project;
+          const p = JSON.stringify(displayConfig) !== JSON.stringify(project.config) ? await save(displayConfig) : project;
           const next = await api<Run>('/runs', { method: 'POST', body: JSON.stringify({ revision: p.revision, name: runName || 'Tomato simulation' }) });
           localStorage.setItem('autotom-selected-run', next.id);
           setRun({ ...next, available_days: [] }); setData([]); setDay(1); setPlaying(false); setView('result');
           setRuns(current => [next, ...current]); setNotice('Simulation queued. Each completed day will become available automatically.');
         })}>{busy ? <LoaderCircle size={16} className="spin" /> : <Play size={15} fill="currentColor" />}Run simulation</button></div></div>
 
-    <div className={`workspace ${pane ? 'with-inspector' : ''}`}>
+    <section className="configuration-bar" aria-label="Configuration library">
+      <label>Saved configurations<select aria-label="Saved configurations" value={configurationId} disabled={busy} onChange={e => selectConfiguration(e.target.value)}>
+        <option value="">{savedConfigurations.length ? 'Select a configuration' : 'No saved configurations yet'}</option>
+        {savedConfigurations.map(saved => <option key={saved.id} value={saved.id}>{saved.name} · {new Date(saved.created_at).toLocaleString()}</option>)}
+      </select></label>
+      <label>Configuration name<input aria-label="Configuration name" placeholder="e.g. Warm room · low light" maxLength={100} value={configurationName} onChange={e => setConfigurationName(e.target.value)} /></label>
+      <button className="button" disabled={busy || !configurationName.trim()} onClick={() => action(async () => {
+        const saved = await api<SavedConfiguration>('/configurations', { method: 'POST', body: JSON.stringify({ name: configurationName.trim(), config: displayConfig }) });
+        setSavedConfigurations(current => [saved, ...current]); setConfigurationId(saved.id);
+        setNotice(`Saved “${saved.name}” as a configuration file. Each save creates a new copy.`);
+      })}><Save size={14} />Save configuration</button>
+      <button className="button danger" disabled={busy || !configurationId} aria-label="Delete configuration" onClick={() => {
+        const saved = savedConfigurations.find(item => item.id === configurationId);
+        if (!saved || !window.confirm(`Delete saved configuration “${saved.name}”? The current editor and run results will be kept.`)) return;
+        action(async () => {
+          await api<void>(`/configurations/${saved.id}`, { method: 'DELETE' });
+          setSavedConfigurations(current => current.filter(item => item.id !== saved.id)); setConfigurationId('');
+          setNotice('Saved configuration deleted.');
+        });
+      }}><Trash2 size={14} />Delete</button>
+      <p>Save model parameters, temperatures, plants, lights and surroundings together. Select a file to load it into the editor.</p>
+    </section>
+
+    <div className={`workspace ${view === 'compare' ? 'comparison-workspace' : pane ? 'with-inspector' : ''}`}>
       <aside className="left-sidebar"><div className="sidebar-section"><div className="sidebar-title"><Layers3 size={14} /><h2>Scene objects</h2><span>{itemsOf(config).length}</span></div>
         <SceneList config={config} selected={selected} onSelect={(ids,additive)=>{setView('preview');selectObjects(ids,additive);}} /></div>
         <div className="sidebar-section runs-sidebar"><div className="sidebar-title"><Clock3 size={14} /><h2>Saved runs</h2><span>{runs.length}</span></div>
-          {!runs.length ? <div className="no-runs"><Sprout size={24} /><p>No simulations yet</p><span>Your runs stay here after restarting Docker.</span></div> : <div className="run-list">{runs.map(r => <button key={r.id} className={`run-row ${run?.id === r.id ? 'selected' : ''}`} onClick={() => selectRun(r.id)}>
+          {!runs.length ? <div className="no-runs"><Sprout size={24} /><p>No simulations yet</p><span>Your runs stay here after restarting Docker.</span></div> : <div className="run-list">{runs.map(r => <div key={r.id} className="run-entry"><button className={`run-row ${run?.id === r.id ? 'selected' : ''}`} disabled={busy} onClick={() => selectRun(r.id)}>
             <span className={`run-status-dot ${r.status}`} /><div><strong>{r.name}</strong><span>{new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · {r.current_day}/{r.days} days</span></div>
-            {r.status === 'completed' && <Check size={12} />}</button>)}</div>}
+            {r.status === 'completed' && <Check size={12} />}</button><RunMenu run={run?.id === r.id ? run : r} busy={busy} onRename={beginRename} onDelete={deleteRun} /></div>)}</div>}
         </div>
         <div className="model-credit"><Leaf size={16} /><div><strong>Micro-Tom</strong><span>GroIMP 2.2 · spectral Flux</span></div><a href="https://github.com/Micbut/FSP-model-dwarf-tomato" target="_blank" rel="noreferrer" aria-label="Open original model repository">↗</a></div>
       </aside>
 
       <main className="main-panel"><div className="viewport-topbar"><div className="view-tabs"><button className={view === 'preview' ? 'active' : ''} onClick={() => setView('preview')}>Scene editor</button>
-        <button className={view === 'result' ? 'active' : ''} disabled={!run} onClick={() => setView('result')}>Simulation result</button></div>
-        <div className="config-buttons">{([['lights', Lightbulb, 'Lights'], ['surroundings', Box, 'Surroundings'], ['plants', Sprout, 'Plants'], ['parameters', Leaf, 'Model parameters'], ['simulation', Settings2, 'Simulation']] as const).map(([key, Icon, label]) =>
-          <button key={key} aria-label={label} title={label} className={`config-button ${pane === key ? 'active' : ''}`} onClick={() => { setPane(pane === key ? null : key); if (pane !== key) setView('preview'); }}><Icon size={14} /><span>{label}</span></button>)}</div></div>
+        <button className={view === 'result' ? 'active' : ''} disabled={!run} onClick={() => setView('result')}>Simulation result</button>
+        <button className={view === 'compare' ? 'active' : ''} onClick={() => { setView('compare'); setPlaying(false); }}>Compare</button></div>
+        {view !== 'compare' && <div className="config-buttons">{([['lights', Lightbulb, 'Lights'], ['surroundings', Box, 'Surroundings'], ['plants', Sprout, 'Plants'], ['parameters', Leaf, 'Model parameters'], ['simulation', Settings2, 'Simulation']] as const).map(([key, Icon, label]) =>
+          <button key={key} aria-label={label} title={label} className={`config-button ${pane === key ? 'active' : ''}`} onClick={() => { setPane(pane === key ? null : key); if (pane !== key) setView('preview'); }}><Icon size={14} /><span>{label}</span></button>)}</div>}</div>
+        {view === 'compare' ? <Compare runs={runs} selection={comparison} onSelection={setComparison} preferredRun={run?.id} /> : <>
         <div className="viewport"><Scene config={displayConfig} selected={selected} mode={mode} tool={tool} readOnly={view==='result'} result={hasResult && run ? { run: run.id, day } : null} showRoom={showRoom} onSelect={selectScene} onTransform={transformObjects} onPivot={updatePivot} />
           <div className="viewport-label"><span className="status-dot" />{hasResult ? `SIMULATION · DAY ${day}` : view === 'result' && run ? 'AWAITING DAILY OUTPUT' : 'ENVIRONMENT PREVIEW'}
             <small>{hasResult ? run?.name : `${config.planting.plants.filter(p=>p.enabled&&p.role==='central').length} central plants · Z-up`}</small></div>
@@ -228,11 +299,26 @@ export default function App() {
           {days.includes(day) && <a className="text-button" href={artifactUrl(run.id, `days/${String(day).padStart(4, '0')}/scene.zip`)} download><ArrowDownToLine size={13} />OBJ + MTL</a>}
           {run.raw_available && <a className="text-button" href={artifactUrl(run.id, 'raw.zip')} download><ArrowDownToLine size={13} />CSV</a>}</div>}
         {run?.error && <div className="run-error" role="alert">{run.error}<button className="text-button" onClick={() => setLogOpen(true)}>Open log</button></div>}
+        </>}
       </main>
-      {pane && <div className={`inspector-wrapper ${view==='result'?'read-only':''}`}><fieldset disabled={view==='result'}><Inspector key={pane} pane={pane} config={config} pivot={pivot} revision={project.revision} selected={selected} inputs={project.inputs} onChange={changeConfig} onSelect={ids=>selectObjects(ids)} onClose={() => setPane(null)} /></fieldset></div>}
+      {pane && view !== 'compare' && <div className={`inspector-wrapper ${view==='result'?'read-only':''}`}><fieldset disabled={view==='result'}><Inspector key={pane} pane={pane} config={config} pivot={pivot} revision={project.revision} selected={selected} inputs={project.inputs} onChange={changeConfig} onSelect={ids=>selectObjects(ids)} onClose={() => setPane(null)} /></fieldset></div>}
     </div>
-    <Charts names={Object.fromEntries((run?.config.planting?.plants||[]).filter(p=>p.role==='central').map(p=>[p.reporting_id,p.name]))} data={data} day={day} plant={plant} onPlant={setPlant} onDay={n => { if (days.includes(n)) { setDay(n); setView('result'); setPlaying(false); } }} />
-    <footer className="page-footer"><span><span className="status-dot" /> Host files persist outside Docker</span><span>Results use saved run snapshots · {hasResult ? 'Real GroIMP output' : 'Editor preview'}</span></footer>
+    {view !== 'compare' && <Charts names={Object.fromEntries((run?.config.planting?.plants||[]).filter(p=>p.role==='central').map(p=>[p.reporting_id,p.name]))} data={data} day={day} plant={plant} onPlant={setPlant} onDay={n => { if (days.includes(n)) { setDay(n); setView('result'); setPlaying(false); } }} />}
+    <footer className="page-footer"><span><span className="status-dot" /> Host files persist outside Docker</span><span>Results use saved run snapshots · {view === 'compare' ? 'Daily metrics comparison' : hasResult ? 'Real GroIMP output' : 'Editor preview'}</span></footer>
+    {renamingRun && <div className="modal-backdrop" onClick={() => { if (!busy) setRenamingRun(null); }}>
+      <form className="rename-run-modal" role="dialog" aria-modal="true" aria-label="Rename run" onClick={e => e.stopPropagation()} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); if (!busy) setRenamingRun(null); } }} onSubmit={e => {
+        e.preventDefault();
+        if (!renamedName.trim() || busy) return;
+        action(async () => {
+          const updated = await api<Run>(`/runs/${renamingRun.id}`, { method: 'PATCH', body: JSON.stringify({name: renamedName.trim()}) });
+          setRuns(current => current.map(item => item.id === updated.id ? {...item, name: updated.name} : item));
+          setRun(current => current?.id === updated.id ? {...current, name: updated.name} : current);
+          setRenamingRun(null); setNotice('Run renamed.');
+        });
+      }}>
+        <h2>Rename run</h2><label className="text-field">New run name<input aria-label="New run name" autoFocus required maxLength={100} value={renamedName} disabled={busy} onFocus={e => e.target.select()} onChange={e => setRenamedName(e.target.value)} /></label>
+        <div className="rename-run-buttons"><button type="button" className="button" disabled={busy} onClick={() => setRenamingRun(null)}>Cancel</button><button type="submit" className="button primary" disabled={busy || !renamedName.trim()}>Save name</button></div>
+      </form></div>}
     {logOpen && <div className="modal-backdrop" onClick={() => setLogOpen(false)}><section role="dialog" aria-modal="true" aria-label="Simulation log" className="log-modal" onClick={e => e.stopPropagation()}>
       <header><div><Terminal size={18} /><h2>Simulation log</h2></div><button className="icon-button" aria-label="Close simulation log" onClick={() => setLogOpen(false)}><X size={20} /></button></header>
       <pre>{logs || 'Loading log…'}</pre><footer>Last 64 KB · updates every 2 seconds</footer></section></div>}

@@ -3,7 +3,7 @@ import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Too
 import { Activity } from 'lucide-react';
 import type { DailyResult, Metric } from './types';
 
-const measures = [
+export const measures = [
   { key: 'biomass_g', title: 'Plant dry biomass', unit: 'g', color: '#b8e68b' },
   { key: 'fruit_g', title: 'Fruit dry biomass', unit: 'g', color: '#eaa28f' },
   { key: 'leaf_area_m2', title: 'Leaf area', unit: 'm²', color: '#80cbb0' },

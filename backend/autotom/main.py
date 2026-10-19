@@ -4,12 +4,14 @@ import os
 import time
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .adapter import Conflict, ModelError
 from .project import Project
 from .schema import (CreateRun, SaveConfiguration, ConfigurationResponse, DailyResult,
-                     RunRecord, RunDetail, HealthResponse, LogResponse, InputPreviewRequest, InputPreviewResponse, LayoutRequest, Planting)
+                     RunRecord, RunDetail, HealthResponse, LogResponse, InputPreviewRequest, InputPreviewResponse, LayoutRequest, Planting,
+                     CreateSavedConfiguration, SavedConfiguration, RenameRun)
+from .configurations import Configurations
 from .store import Store
 from .parameters import preview
 from .layout import generate_layout
@@ -17,6 +19,7 @@ from .adapter import revision
 
 DATA = Path(os.getenv("DATA_DIR", "/data"))
 store = Store(DATA)
+configurations = Configurations(DATA)
 project = Project(Path(os.getenv("MODEL_DIR", "/model")), store)
 app = FastAPI(title="AutoTom", version="1.0.0", docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "api", "web", "testserver", *os.getenv("ALLOWED_HOSTS", "").split(",")])
@@ -96,6 +99,33 @@ def runs():
     return store.list()
 
 
+@app.get("/api/configurations", response_model=list[SavedConfiguration])
+def saved_configurations():
+    return configurations.list()
+
+
+@app.post("/api/configurations", status_code=201, response_model=SavedConfiguration)
+def create_saved_configuration(body: CreateSavedConfiguration):
+    return configurations.create(body)
+
+
+@app.get("/api/configurations/{identifier}", response_model=SavedConfiguration)
+def saved_configuration(identifier: str):
+    try:
+        return configurations.get(identifier)
+    except FileNotFoundError:
+        raise HTTPException(404, "Configuration not found")
+
+
+@app.delete("/api/configurations/{identifier}", status_code=204)
+def delete_saved_configuration(identifier: str):
+    try:
+        configurations.delete(identifier)
+    except FileNotFoundError:
+        raise HTTPException(404, "Configuration not found")
+    return Response(status_code=204)
+
+
 @app.post("/api/runs", status_code=201, response_model=RunRecord)
 def create_run(body: CreateRun):
     worker = worker_status()
@@ -125,6 +155,25 @@ def run_detail(identifier):
 @app.get("/api/runs/{identifier}", response_model=RunDetail)
 def get_run(identifier: str):
     return run_detail(identifier)
+
+
+@app.delete("/api/runs/{identifier}", status_code=204)
+def delete_run(identifier: str):
+    try:
+        store.delete(identifier)
+    except FileNotFoundError:
+        raise HTTPException(404, "Run not found")
+    except ValueError as error:
+        raise HTTPException(409, str(error))
+    return Response(status_code=204)
+
+
+@app.patch("/api/runs/{identifier}", response_model=RunRecord)
+def rename_run(identifier: str, body: RenameRun):
+    try:
+        return store.rename(identifier, body.name)
+    except FileNotFoundError:
+        raise HTTPException(404, "Run not found")
 
 
 @app.post("/api/runs/{identifier}/cancel", response_model=RunDetail)

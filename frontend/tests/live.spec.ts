@@ -1,5 +1,25 @@
 import { test, expect } from '@playwright/test';
 
+test('compare graphs real saved runs without modifying experiments', async ({ page, request }) => {
+  test.skip(process.env.LIVE !== '1', 'Enable LIVE=1 for read-only checks against the running application');
+  const response = await request.get('/api/runs');
+  expect(response.ok()).toBeTruthy();
+  const runs = await response.json() as { id: string; current_day: number }[];
+  const pair = runs.filter(run => run.current_day > 0).slice(0, 2);
+  test.skip(pair.length < 2, 'Two runs with daily results are needed');
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await page.getByRole('button', {name:'Compare',exact:true}).click();
+  await page.getByLabel('Compare run B', {exact:true}).selectOption(pair[1].id);
+  await page.getByLabel('Compare run A', {exact:true}).selectOption(pair[0].id);
+  await expect(page.locator('.comparison-chart')).toHaveCount(5);
+  await expect(page.getByRole('article', {name:'Plant dry biomass comparison',exact:true}).locator('.recharts-line-curve')).toHaveCount(2);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.screenshot({path:'test-results/compare-real-runs.png',fullPage:true});
+  expect(errors).toEqual([]);
+});
+
 test('real saved 80-day GroIMP run loads geometry, materials, charts and survives reload', async ({ page }) => {
   test.skip(process.env.LIVE !== '1', 'Enable LIVE=1 to inspect real saved output without modifying the model');
   const errors: string[] = [];

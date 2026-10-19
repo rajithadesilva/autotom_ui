@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import * as THREE from 'three';
-import type { Config, Run } from '../src/types';
+import type { Config, DailyResult, Run, SavedConfiguration } from '../src/types';
 
 const config: Config = {
   version: 2,
@@ -19,10 +19,22 @@ async function mockApi(page: Page, options: { installed?: boolean; status?: Run[
   let run: Run = { id: 'test-run', name: 'Three day experiment', status: options.status || 'completed', created_at: '2026-10-19T10:00:00Z', started_at: null,
     finished_at: null, days: 3, current_day: 3, cancel_requested: false, error: null, revision, config: saved, available_days: [1, 2, 3] };
   let runs: Run[] = installed ? [run] : [];
+  let configurations: SavedConfiguration[] = [];
+  let nextConfiguration = 1;
   const project = () => ({ config: saved, revision, installed, inputs: { dynamic_input: ['plant.csv'], temperature: ['temperature.csv'], light_emission_pattern: ['distribution.csv'], light_spectrum: ['spectrum.csv'] } });
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname, method = route.request().method();
     const json = (body: unknown, status = 200) => route.fulfill({ status, json: body });
+    if (path === '/api/configurations' && method === 'GET') return json(configurations);
+    if (path === '/api/configurations' && method === 'POST') {
+      const record = { ...route.request().postDataJSON(), id: `configuration-${nextConfiguration++}`, created_at: new Date().toISOString() };
+      configurations = [record, ...configurations]; return json(record, 201);
+    }
+    if (path.startsWith('/api/configurations/')) {
+      const id = path.split('/').at(-1);
+      if (method === 'DELETE') { configurations = configurations.filter(item => item.id !== id); return route.fulfill({status:204}); }
+      return json(configurations.find(item => item.id === id));
+    }
     if (path === '/api/inputs/preview') return json({revision,parameters:[
       {key:'base_temperature',label:'Base temperature',type:'number',group:'growth',unit:'°C',min:-100,max:100,value:5.7},
       {key:'proportion_petiolules_first_leaves',label:'First leaf proportions',type:'array',length:2,group:'architecture',unit:'',min:0,max:1,value:[.66,.34]},
@@ -49,12 +61,235 @@ async function mockApi(page: Page, options: { installed?: boolean; status?: Run[
     if (path.endsWith('/events')) return route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify(run)}\n\n` });
     if (path.endsWith('/metrics')) return json([1, 2, 3].map(day => ({ day, plants: [{ plant: 1, model_age_days: day, biomass_g: day * 0.1, fruit_g: 0, leaf_area_m2: day * 0.002, par_umol_s: 1, par_mmol_day: 57.6, carbon_mmol_day: 2 }] })));
     if (path.endsWith('/logs')) return json({ text: 'AUTOTOM_DAY 1\nAUTOTOM_COMPLETE' });
+    if (path.startsWith('/api/runs/') && method === 'DELETE') { runs = runs.filter(item => item.id !== path.split('/').at(-1)); return route.fulfill({status:204}); }
+    if (path.startsWith('/api/runs/') && method === 'PATCH') {
+      run = {...run, name: route.request().postDataJSON().name};
+      runs = runs.map(item => item.id === run.id ? run : item); return json(run);
+    }
     if (path.endsWith('plants.obj')) return route.fulfill({ contentType: 'text/plain', body: 'v 0.5 0.5 0.065 0.2 0.6 0.1\nv 0.6 0.5 0.4 0.2 0.6 0.1\nv 0.7 0.5 0.065 0.2 0.6 0.1\nf 1 2 3\n' });
     if (path.startsWith('/api/runs/')) return json(run);
     return json({ detail: 'Unknown test route' }, 404);
   });
   return { getSaved: () => saved };
 }
+
+async function mockComparison(page: Page, options: { count?: number; emptyB?: boolean; failB?: boolean } = {}) {
+  await mockApi(page);
+  const runs: Run[] = ['a', 'b', 'c'].slice(0, options.count ?? 3).map((id, index) => ({
+    id, name: `Experiment ${id.toUpperCase()}`, status: 'completed', created_at: '2026-10-19T10:00:00Z',
+    started_at: null, finished_at: null, days: index === 1 ? 4 : 3, current_day: index === 1 ? 4 : 3,
+    cancel_requested: false, error: null, revision: 'r1', config,
+  }));
+  let failB = options.failB;
+  const metrics: Record<string, DailyResult[]> = {};
+  for (const [index, run] of runs.entries()) metrics[run.id] = (run.id === 'a' ? [1, 3] : [1, 2, 3, 4]).map(day => ({
+    day, plants: [1, 2].map(plant => ({ plant, model_age_days: day,
+      biomass_g: day * (index + 1) * (plant === 1 ? 1 : 3), fruit_g: 0, leaf_area_m2: day * .01,
+      par_umol_s: 1, par_mmol_day: 57.6, carbon_mmol_day: day * (index + 1) })),
+  }));
+  if (options.emptyB) metrics.b = [];
+  await page.route('**/api/runs', route => route.fulfill({json:runs}));
+  await page.route('**/api/runs/*/metrics', route => {
+    const id = new URL(route.request().url()).pathname.split('/')[3];
+    return id === 'b' && failB ? route.fulfill({status:500,json:{detail:'Metrics unavailable'}}) : route.fulfill({json:metrics[id]});
+  });
+  return { runs, metrics, recover: () => { failB = false; } };
+}
+
+test('compare overlays two runs by day, reports differences and supports independent plants', async ({ page }) => {
+  await mockComparison(page);
+  await page.goto('/');
+  await page.getByRole('button', {name:'Compare',exact:true}).click();
+  await expect(page.getByLabel('Compare run A', {exact:true})).toHaveValue('a');
+  await expect(page.getByLabel('Compare run B', {exact:true})).toHaveValue('b');
+  await expect(page.getByLabel('Compare run B', {exact:true}).locator('option[value="a"]')).toHaveAttribute('disabled', '');
+  const chart = page.getByRole('article', {name:'Plant dry biomass comparison',exact:true});
+  await expect(page.locator('.comparison-chart')).toHaveCount(5);
+  await expect(chart.locator('dd')).toHaveText(['6', '12', '+6']);
+  await expect(chart).toContainText('Day 3 · latest shared day');
+  await expect(chart.locator('.recharts-line-curve')).toHaveCount(2);
+  // The missing day 2 in A produces two separate path segments, rather than an interpolated value.
+  await expect(chart.locator('.recharts-line-curve').first()).toHaveAttribute('d', /M.*M/);
+  await page.getByLabel('Run A reporting', {exact:true}).selectOption('1');
+  await expect(chart.locator('dd')).toHaveText(['3', '12', '+9']);
+  await page.getByLabel('Run B reporting', {exact:true}).selectOption('1');
+  await expect(chart.locator('dd')).toHaveText(['3', '6', '+3']);
+  await page.getByLabel('Compare run B', {exact:true}).selectOption('c');
+  await expect(chart.locator('dd')).toHaveText(['6', '18', '+12']);
+  await page.getByRole('button', {name:'Scene editor',exact:true}).click();
+  await expect(page.locator('canvas')).toBeVisible();
+  await page.getByRole('button', {name:'Compare',exact:true}).click();
+  await expect(page.getByLabel('Compare run B', {exact:true})).toHaveValue('c');
+  await expect(chart.locator('dd')).toHaveText(['6', '18', '+12']);
+  await page.screenshot({path:'test-results/compare-desktop.png',fullPage:true});
+});
+
+test('compare explains insufficient runs and unpublished results', async ({ page }) => {
+  await mockComparison(page, {count:1});
+  await page.goto('/');
+  await page.getByRole('button', {name:'Compare',exact:true}).click();
+  await expect(page.getByText('Create at least two simulation runs to compare their results.')).toBeVisible();
+  await expect(page.locator('.comparison-chart')).toHaveCount(0);
+  await mockComparison(page, {count:2,emptyB:true});
+  await page.reload();
+  await page.getByRole('button', {name:'Compare',exact:true}).click();
+  await expect(page.getByRole('heading', {name:'Waiting for daily results'})).toBeVisible();
+  await expect(page.getByText('Run B needs at least one published day', {exact:false})).toBeVisible();
+});
+
+test('compare recovers from metric errors', async ({ page }) => {
+  const state = await mockComparison(page, {failB:true});
+  await page.goto('/');
+  await page.getByRole('button', {name:'Compare',exact:true}).click();
+  await expect(page.getByRole('alert')).toContainText('Metrics unavailable');
+  await expect(page.locator('.comparison-chart')).toHaveCount(0);
+  state.recover();
+  await page.getByRole('button', {name:'Retry comparison'}).click();
+  await expect(page.locator('.comparison-chart')).toHaveCount(5);
+});
+
+test('compare fits mobile screens', async ({ page }) => {
+  await page.setViewportSize({width:390,height:844});
+  await mockComparison(page);
+  await page.goto('/');
+  await page.getByRole('button', {name:'Compare',exact:true}).click();
+  await expect(page.locator('.comparison-chart')).toHaveCount(5);
+  await expect(page.getByLabel('Compare run A', {exact:true})).toBeVisible();
+  await expect(page.getByLabel('Compare run B', {exact:true})).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({path:'test-results/compare-mobile.png',fullPage:true});
+});
+
+test('compare plots disjoint day ranges without inventing differences', async ({ page }) => {
+  const state = await mockComparison(page);
+  state.metrics.b = state.metrics.b.map(row => ({...row,day:row.day + 10}));
+  await page.goto('/');
+  await page.getByRole('button', {name:'Compare',exact:true}).click();
+  const chart = page.getByRole('article', {name:'Plant dry biomass comparison',exact:true});
+  await expect(chart.locator('.recharts-line-curve')).toHaveCount(2);
+  await expect(chart.locator('dd')).toHaveText(['—', '—', '—']);
+  await expect(chart).toContainText('No shared day for these reports');
+});
+
+test('compare refreshes results when a running simulation publishes a day', async ({ page }) => {
+  const state = await mockComparison(page);
+  const published = state.metrics.b;
+  state.metrics.b = [];
+  state.runs[1].status = 'running'; state.runs[1].current_day = 0;
+  await page.goto('/');
+  await page.getByRole('button', {name:'Compare',exact:true}).click();
+  await expect(page.getByRole('heading', {name:'Waiting for daily results'})).toBeVisible();
+  state.metrics.b = published;
+  state.runs[1].current_day = 4; state.runs[1].status = 'completed';
+  await expect(page.locator('.comparison-chart')).toHaveCount(5, {timeout:10000});
+  await expect(page.getByRole('article', {name:'Plant dry biomass comparison',exact:true}).locator('dd')).toHaveText(['6', '12', '+6']);
+});
+
+test('named configurations save drafts, survive reload, load, and delete independently of runs', async ({ page }) => {
+  const state = await mockApi(page);
+  await page.goto('/');
+  await page.locator('.object-row').filter({hasText:'LED 1'}).click();
+  await page.getByLabel('Emitted power', {exact:true}).fill('27');
+  await page.getByLabel('Configuration name', {exact:true}).fill('Low light');
+  await page.getByRole('button', {name:'Save configuration', exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('Saved “Low light”');
+  expect(state.getSaved().objects[0].power_w).toBe(43.8);
+  await page.reload();
+  await expect(page.getByLabel('Saved configurations', {exact:true}).locator('option')).toHaveCount(2);
+  await page.getByLabel('Saved configurations', {exact:true}).selectOption('configuration-1');
+  await expect(page.getByRole('status')).toContainText('Loaded “Low light”');
+  await page.locator('.object-row').filter({hasText:'LED 1'}).click();
+  await expect(page.getByLabel('Emitted power', {exact:true})).toHaveValue('27');
+  await page.getByRole('button', {name:'Run simulation',exact:true}).click();
+  expect(state.getSaved().objects[0].power_w).toBe(27);
+  await expect(page.locator('.run-progress')).toContainText('Simulating');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', {name:'Delete configuration',exact:true}).click();
+  await expect(page.getByLabel('Saved configurations', {exact:true}).locator('option')).toHaveCount(1);
+  await expect(page.locator('.run-progress')).toContainText('Simulating');
+});
+
+test('new run opens an editable draft and finished runs can be deleted', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await page.locator('.run-row').click();
+  await page.getByRole('button', {name:'New run',exact:true}).click();
+  await expect(page.getByRole('button', {name:'Scene editor',exact:true})).toHaveClass('active');
+  await expect(page.locator('.run-progress')).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('autotom-selected-run'))).toBeNull();
+  await expect(page.locator('.run-row')).toHaveCount(1);
+  await page.locator('.run-row').click();
+  await page.getByRole('button', {name:'Actions for Three day experiment',exact:true}).click();
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.getByRole('menuitem', {name:'Delete',exact:true}).click();
+  await expect(page.locator('.run-row')).toHaveCount(1);
+  await page.getByRole('button', {name:'Actions for Three day experiment',exact:true}).click();
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('menuitem', {name:'Delete',exact:true}).click();
+  await expect(page.locator('.run-row')).toHaveCount(0);
+  await expect(page.locator('.run-progress')).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('Run and its results deleted');
+});
+
+test('running simulations cannot be deleted', async ({ page }) => {
+  await mockApi(page, {status:'running'});
+  await page.goto('/');
+  await page.locator('.run-row').click();
+  await page.getByRole('button', {name:'Actions for Three day experiment',exact:true}).click();
+  await expect(page.getByRole('menuitem', {name:'Delete',exact:true})).toBeDisabled();
+  await expect(page.getByRole('menuitem', {name:'Rename',exact:true})).toBeEnabled();
+});
+
+test('run row menu renames without selecting a run and keeps the name after reload', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  const actions = page.getByRole('button', {name:'Actions for Three day experiment',exact:true});
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await actions.click();
+  await expect(page.locator('.run-progress')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(actions).toBeFocused();
+  await actions.click();
+  await page.getByRole('heading', {name:'Simulation workspace',exact:true}).click();
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await actions.click();
+  await page.getByRole('menuitem', {name:'Rename',exact:true}).click();
+  const dialog = page.getByRole('dialog', {name:'Rename run',exact:true});
+  await expect(dialog.getByLabel('New run name')).toHaveValue('Three day experiment');
+  await dialog.getByLabel('New run name').fill('   ');
+  await expect(dialog.getByRole('button', {name:'Save name',exact:true})).toBeDisabled();
+  await dialog.getByLabel('New run name').fill('Low light experiment');
+  await dialog.getByRole('button', {name:'Save name',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.run-row')).toContainText('Low light experiment');
+  await expect(page.locator('.run-progress')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.run-row')).toContainText('Low light experiment');
+  await page.getByRole('button', {name:'Actions for Low light experiment',exact:true}).click();
+  await expect(page.getByRole('menu')).toBeVisible();
+  await page.screenshot({path:'test-results/run-actions-menu.png'});
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('menuitem', {name:'Delete',exact:true}).click();
+  await expect(page.locator('.run-row')).toHaveCount(0);
+});
+
+test('mobile run menu renames the selected run beside its dropdown', async ({ page }) => {
+  await page.setViewportSize({width:390,height:844});
+  await mockApi(page);
+  await page.goto('/');
+  await page.getByLabel('Saved runs', {exact:true}).selectOption('test-run');
+  await page.getByRole('button', {name:'Actions for Three day experiment',exact:true}).click();
+  await page.getByRole('menuitem', {name:'Rename',exact:true}).click();
+  await page.getByLabel('New run name', {exact:true}).fill('Mobile experiment');
+  await page.getByRole('button', {name:'Save name',exact:true}).click();
+  await expect(page.getByLabel('Saved runs', {exact:true}).locator('option:checked')).toContainText('Mobile experiment');
+  await expect(page.locator('.viewport-label')).toContainText('Mobile experiment');
+  await page.getByRole('button', {name:'Actions for Mobile experiment',exact:true}).click();
+  await expect(page.getByRole('menu')).toBeVisible();
+  await page.screenshot({path:'test-results/run-actions-mobile.png'});
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
 
 test('setup, pane navigation, object editing, and saving host configuration', async ({ page }) => {
   const state = await mockApi(page, { installed: false });

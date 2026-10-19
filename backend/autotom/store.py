@@ -1,4 +1,5 @@
 import json
+import shutil
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -81,6 +82,27 @@ class Store:
             conn.execute("UPDATE runs SET cancel_requested=1 WHERE id=? AND status IN ('queued','running')", (run_id,))
             conn.execute("UPDATE runs SET status='cancelled',finished_at=? WHERE id=? AND status='queued'",
                          (now(), run_id))
+
+    def rename(self, run_id, name):
+        with self.connection() as conn:
+            result = conn.execute("UPDATE runs SET name=? WHERE id=?", (name.strip(), run_id))
+            if result.rowcount == 0:
+                raise FileNotFoundError("Run not found")
+        return self.get(run_id)
+
+    def delete(self, run_id):
+        with self.connection() as conn:
+            # Serialize against worker claims so a queued run cannot start during deletion.
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
+            if row is None:
+                raise FileNotFoundError("Run not found")
+            if row["status"] in ("queued", "running"):
+                raise ValueError("Cancel the run and wait for it to stop before deleting it")
+            directory = self.runs / run_id
+            if directory.exists():
+                shutil.rmtree(directory)
+            conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
 
     def interrupt_old_runs(self):
         with self.connection() as conn:
