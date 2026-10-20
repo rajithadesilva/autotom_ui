@@ -47,6 +47,7 @@ export default function App() {
   const days = run?.available_days || [];
   const terminal = !run || ['completed', 'failed', 'cancelled'].includes(run.status);
   const hasResult = view === 'result' && Boolean(run && days.includes(day));
+  const displayConfig = view === 'result' && run ? run.config : config;
 
   const loadProject = useCallback(async () => {
     const p = await api<ConfigResponse>('/config');
@@ -174,22 +175,22 @@ export default function App() {
   const selectObjects = useCallback((ids: string[], additive=false) => {
     setSelected(previous=>additive ? ids.reduce((next,id)=>next.includes(id)?next.filter(i=>i!==id):[...next,id],previous) : ids);
     if(ids.length===1) {
-      const item=config&&itemsOf(config).find(i=>i.id===ids[0]);
+      const item=displayConfig&&itemsOf(displayConfig).find(i=>i.id===ids[0]);
       if(item) setPane(isPlant(item)?'plants':item.kind==='led'?'lights':'surroundings');
     } else if(ids.length>1) setPane(current=>current==='parameters'||current==='simulation'||!current?'surroundings':current);
-  }, [config]);
+  }, [displayConfig]);
   function selectScene(ids:string[],additive=false,expandGroups=true) {
-    const expanded=expandGroups?[...new Set(ids.flatMap(id=>config?.groups.find(g=>g.members.includes(id))?.members||[id]))]:ids;
+    const expanded=expandGroups?[...new Set(ids.flatMap(id=>displayConfig?.groups.find(g=>g.members.includes(id))?.members||[id]))]:ids;
     selectObjects(expanded,additive);
   }
   function transformObjects(poses: Pose[]) {
     if(config) {const next=applyPoses(config,poses);const message=sceneError(next);if(message) {setError(message);history.sync({...config});} else changeConfig(next);}
   }
   useEffect(()=>{
-    if(!config)return;
-    const ids=new Set(itemsOf(config).map(i=>i.id));
+    if(!displayConfig)return;
+    const ids=new Set(itemsOf(displayConfig).map(i=>i.id));
     setSelected(previous=>previous.every(id=>ids.has(id))?previous:previous.filter(id=>ids.has(id)));
-  },[config]);
+  },[displayConfig]);
   useEffect(()=>{
     function key(event:KeyboardEvent) {
       if((event.target as HTMLElement)?.closest('input,textarea,select,[contenteditable="true"]'))return;
@@ -201,10 +202,9 @@ export default function App() {
     window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);
   },[view]);
 
-  if (!config || !project) return <div className="loading-screen"><Sprout size={40} /><h1>AutoTom</h1>
+  if (!config || !project || !displayConfig) return <div className="loading-screen"><Sprout size={40} /><h1>AutoTom</h1>
     {error ? <><p role="alert">{error}</p><button className="button" onClick={() => loadProject().catch(e => setError(e.message))}>Retry connection</button></> : <p>Opening your simulation workspace…</p>}</div>;
 
-  const displayConfig = view === 'result' && run ? run.config : config;
   return <div className="app-shell" onFocusCapture={e=>{if((e.target as HTMLElement).matches('input,select,textarea'))history.begin();}}
     onBlurCapture={e=>{if((e.target as HTMLElement).matches('input,select,textarea'))history.end();}}
     onPointerDownCapture={e=>{if((e.target as HTMLElement).closest('.spectrum,input[type="range"]'))history.begin();}}
@@ -259,8 +259,8 @@ export default function App() {
     </section>
 
     <div className={`workspace ${view === 'compare' ? 'comparison-workspace' : pane ? 'with-inspector' : ''}`}>
-      <aside className="left-sidebar"><div className="sidebar-section"><div className="sidebar-title"><Layers3 size={14} /><h2>Scene objects</h2><span>{itemsOf(config).length}</span></div>
-        <SceneList config={config} selected={selected} onSelect={(ids,additive)=>{setView('preview');selectObjects(ids,additive);}} /></div>
+      <aside className="left-sidebar"><div className="sidebar-section"><div className="sidebar-title"><Layers3 size={14} /><h2>Scene objects</h2><span>{itemsOf(displayConfig).length}</span></div>
+        <SceneList config={displayConfig} selected={selected} onSelect={(ids,additive)=>{if(view==='compare')setView('preview');selectObjects(ids,additive);}} /></div>
         <div className="sidebar-section runs-sidebar"><div className="sidebar-title"><Clock3 size={14} /><h2>Saved runs</h2><span>{runs.length}</span></div>
           {!runs.length ? <div className="no-runs"><Sprout size={24} /><p>No simulations yet</p><span>Your runs stay here after restarting Docker.</span></div> : <div className="run-list">{runs.map(r => <div key={r.id} className="run-entry"><button className={`run-row ${run?.id === r.id ? 'selected' : ''}`} disabled={busy} onClick={() => selectRun(r.id)}>
             <span className={`run-status-dot ${r.status}`} /><div><strong>{r.name}</strong><span>{new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · {r.current_day}/{r.days} days</span></div>
@@ -277,7 +277,7 @@ export default function App() {
         {view === 'compare' ? <Compare runs={runs} selection={comparison} onSelection={setComparison} preferredRun={run?.id} /> : <>
         <div className="viewport"><Scene config={displayConfig} selected={selected} mode={mode} tool={tool} readOnly={view==='result'} result={hasResult && run ? { run: run.id, day } : null} showRoom={showRoom} onSelect={selectScene} onTransform={transformObjects} onPivot={updatePivot} />
           <div className="viewport-label"><span className="status-dot" />{hasResult ? `SIMULATION · DAY ${day}` : view === 'result' && run ? 'AWAITING DAILY OUTPUT' : 'ENVIRONMENT PREVIEW'}
-            <small>{hasResult ? run?.name : `${config.planting.plants.filter(p=>p.enabled&&p.role==='central').length} central plants · Z-up`}</small></div>
+            <small>{hasResult ? run?.name : `${displayConfig.planting.plants.filter(p=>p.enabled&&p.role==='central').length} central plants · Z-up`}</small></div>
           {view === 'preview' && <div className="viewport-tools"><button className={mode === 'translate' ? 'active' : ''} aria-label="Translate selection" title="Move object" onClick={() => {setTool('orbit');setMode('translate');}}><Move3D size={17} /></button>
             <button className={mode === 'rotate' ? 'active' : ''} aria-label="Rotate selection" title="Rotate object" onClick={() => {setTool('orbit');setMode('rotate');}}><Rotate3D size={17} /></button>
             <button className={tool==='box'?'active':''} aria-label="Box selection" title="Box selection" onClick={()=>setTool(tool==='box'?'orbit':'box')}><Scan size={17}/></button>
@@ -301,7 +301,7 @@ export default function App() {
         {run?.error && <div className="run-error" role="alert">{run.error}<button className="text-button" onClick={() => setLogOpen(true)}>Open log</button></div>}
         </>}
       </main>
-      {pane && view !== 'compare' && <div className={`inspector-wrapper ${view==='result'?'read-only':''}`}><fieldset disabled={view==='result'}><Inspector key={pane} pane={pane} config={config} pivot={pivot} revision={project.revision} selected={selected} inputs={project.inputs} onChange={changeConfig} onSelect={ids=>selectObjects(ids)} onClose={() => setPane(null)} /></fieldset></div>}
+      {pane && view !== 'compare' && <div className={`inspector-wrapper ${view==='result'?'read-only':''}`}><fieldset disabled={view==='result'}><Inspector key={pane} pane={pane} config={displayConfig} pivot={pivot} revision={project.revision} selected={selected} inputs={project.inputs} onChange={changeConfig} onSelect={ids=>selectObjects(ids)} onClose={() => setPane(null)} /></fieldset></div>}
     </div>
     {view !== 'compare' && <Charts names={Object.fromEntries((run?.config.planting?.plants||[]).filter(p=>p.role==='central').map(p=>[p.reporting_id,p.name]))} data={data} day={day} plant={plant} onPlant={setPlant} onDay={n => { if (days.includes(n)) { setDay(n); setView('result'); setPlaying(false); } }} />}
     <footer className="page-footer"><span><span className="status-dot" /> Host files persist outside Docker</span><span>Results use saved run snapshots · {view === 'compare' ? 'Daily metrics comparison' : hasResult ? 'Real GroIMP output' : 'Editor preview'}</span></footer>
