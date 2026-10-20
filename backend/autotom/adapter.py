@@ -11,8 +11,9 @@ from pathlib import Path
 from pydantic import ValidationError
 from .schema import Configuration, SceneObject, SpectrumPoint
 from .parameters import CATALOGUE, effective_inputs
+from .inspection import STATE_FIELDS, export_helper
 
-ADAPTER_VERSION = 2
+ADAPTER_VERSION = 3
 UPSTREAM_COMMIT = "2d727a3364f87392b3f8b74d8ff7127cc5090c3a"
 PATCHED_FILES = ["Model.rgg", "initiation.rgg", "light.rgg", "surroundings.rgg",
                  "param/parameters.rgg", "param/parameters_derived.rgg", "project.gs", "META-INF/MANIFEST.MF"]
@@ -155,7 +156,10 @@ def plant_source(config: Configuration) -> str:
     borders = [p for p in config.planting.plants if p.enabled and p.role == 'border']
     def coordinates(plants):
         return 'new double[][]{' + ','.join('new double[]{' + ','.join(map(number, [*p.position,p.rotation[2]])) + '}' for p in plants) + '}'
-    return ('\nstatic double[][] UI_CENTRAL = ' + coordinates(central) + ';\n'
+    return ('\nmodule AutoTomInstance(int index, boolean border) extends Null;\n'
+            'module AutoTomClone(int index) ==> { PlantBase m = first((* PlantBase *)); UI_BORDER_SOURCE[index] = m[plant_number]; } m;\n'
+            'static int[] UI_BORDER_SOURCE = new int[' + str(len(borders)) + '];\n'
+            '\nstatic double[][] UI_CENTRAL = ' + coordinates(central) + ';\n'
             + 'static double[][] UI_BORDERS = ' + coordinates(borders) + ';\n'
             + 'static int[] UI_IDS = new int[]{' + ','.join(str(p.reporting_id) for p in central) + '};\n'
             + 'static int[] UI_ROWS = new int[]{' + ','.join(str(p.row) for p in central) + '};\n'
@@ -364,7 +368,7 @@ def patched_sources_v1(root: Path) -> dict[str, bytes]:
     return {name: content.encode("cp1252") for name, content in sources.items()}
 
 
-def patched_sources(root: Path) -> dict[str, bytes]:
+def patched_sources_v2(root: Path) -> dict[str, bytes]:
     sources = {name: content.decode('cp1252') for name, content in patched_sources_v1(root).items()}
     param = sources['param/parameters.rgg'].replace('// AutoTom adapter v1.', '// AutoTom adapter v2.', 1)
     for spec in CATALOGUE:
@@ -409,11 +413,24 @@ def patched_sources(root: Path) -> dict[str, bytes]:
     return {name: content.encode('cp1252') for name, content in sources.items()}
 
 
+def patched_sources(root: Path) -> dict[str, bytes]:
+    sources = patched_sources_v2(root)
+    model = 'import static autotom_scene.*;\n' + sources['Model.rgg'].decode('cp1252')
+    model = replace_once(model, '    new File(dir+"ready").createNewFile();',
+                          '    autoTomInspectDay(dir);\n    new File(dir+"ready").createNewFile();', 'inspection export')
+    sources['Model.rgg'] = (model + export_helper()).encode('cp1252')
+    init = sources['initiation.rgg'].decode('cp1252')
+    init = replace_once(init, 'RH(UI_CENTRAL[k][3]) pb:PlantBase', 'RH(UI_CENTRAL[k][3]) AutoTomInstance(k,false) pb:PlantBase', 'central identity')
+    init = replace_once(init, 'RH(UI_BORDERS[k][3]) CopyPlant', 'RH(UI_BORDERS[k][3]) AutoTomInstance(k,true) AutoTomClone(k)', 'border identity')
+    sources['initiation.rgg'] = init.encode('cp1252')
+    return sources
+
+
 def adapter_status(root: Path):
     state = root / '.autotom-adapter.json'
     version = json.loads(state.read_text())['version'] if state.exists() else None
     return {'version': version, 'required_version': ADAPTER_VERSION,
-            'compatible': version == ADAPTER_VERSION, 'upgrade_available': version == 1}
+            'compatible': version == ADAPTER_VERSION, 'upgrade_available': version in (1, 2)}
 
 
 def install(root: Path):
@@ -425,17 +442,21 @@ def install(root: Path):
             if not (root / name).is_file():
                 raise ModelError(f'Adapter source is missing: {name}')
         return
-    if state and state['version'] != 1:
+    if state and state['version'] not in (1, 2):
         raise ModelError('Unsupported model adapter version')
     if not (root / 'project.gs').exists():
         raise ModelError('Mount the model directory containing project.gs, not the repository root')
     config = read_config(root) if state else default_config(root)
     validate_inputs(root, config)
+    declared = set(re.findall(r'^\s*(?:float|double|int|boolean)\s+(\w+)\s*;',
+                             (root / 'plant_level.rgg').read_text(encoding='cp1252').split('// initiation of the plant')[0], re.M))
+    if declared != {field['key'] for field in STATE_FIELDS}:
+        raise ModelError('Unsupported PlantBase fields: update the inspection catalogue')
     try:
         if state:
             # Reconstruct exactly the previously installed adapter from its pristine backup.
             pristine = root / state['backup']
-            expected = patched_sources_v1(pristine)
+            expected = (patched_sources_v1 if state['version'] == 1 else patched_sources_v2)(pristine)
             for name, content in expected.items():
                 actual = (root / name).read_bytes().replace(b'\r\n', b'\n')
                 if actual != content.replace(b'\r\n', b'\n'):

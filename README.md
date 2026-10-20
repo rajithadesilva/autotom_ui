@@ -73,6 +73,10 @@ Nginx serves React/TypeScript/Three.js/Recharts and proxies `/api/` to FastAPI. 
 
 The adapter fixes the upstream duplicate headless initialization and adds explicit scene objects and per-day exports. GroIMP's OBJ exporter writes X,Z,Y coordinates and vertex colors; the worker converts these to Z-up OBJ/MTL before publication. Native exports remain in the run's `model/output` directory.
 
+Use **Inspect** in either viewport to select an individual plant, LED, reflector, or obstacle. The right panel has its own orbit/zoom viewer and searchable, read-only properties. In Simulation, plants have an independent daily timeline; **Sync with simulation** links its slider and playback to the main view. Border clones identify their source and label shared state. Editor inspection shows placement previews and draft inputs.
+
+Adapter v3 records named central plant meshes, actual instance/clone transforms, and all 74 primitive PlantBase state fields. Upgrade through **Upgrade model adapter**, then start a new run for full daily inspection. In older runs, clicking a plant surface opens a chooser ordered by proximity to the click; choose the plant explicitly because those combined meshes do not encode individual identity. Existing runs keep their saved properties, available metrics, and snapshot inputs; they are not rewritten or rerun. Realtime and skeleton views are future additions.
+
 Canonical metrics are `biomass_g` (total plant dry biomass including roots), `fruit_g` (fruit dry biomass), `leaf_area_m2`, `par_umol_s`, `par_mmol_day`, and `carbon_mmol_day`. Daily PAR is instantaneous absorbed PAR × photoperiod × 3600 / 1000. Carbon assimilation is the model's daily CO₂ assimilation / 1000. Original model CSV headers/values are retained for research compatibility; some legacy PAR headers describe instantaneous rates as daily quantities. Use the canonical daily metrics for charts and unit-correct analysis.
 
 FastAPI's typed OpenAPI reference is at **http://localhost:8080/api/docs**, with its schema at **http://localhost:8080/api/openapi.json**. The application is intended for a single trusted user. Model files are executable XL code.
@@ -84,6 +88,8 @@ Rebuild the API, worker, and frontend images with `docker compose build`, then s
 Version 2 adds `planting` (explicit placements, generator settings, stable reporting IDs), `groups` (flat member IDs), `parameter_overrides`, and `temperature_overrides` (zero-based day keys). Version 1 configurations remain readable. Limits are 100 enabled central plants, 1,000 enabled border clones, and 200 environment objects. Border clones use the first enabled central plant.
 
 ### API endpoints
+
+Read-only `GET /api/runs/{id}/inspection` returns inspection version, available inspection days, plant-state field definitions, resolved model inputs, and temperatures from that run's snapshot. Each completed v3 day publishes `inspection.json` with stable instance IDs, clone-source references, row-major Z-up transforms, and state. `plants.obj` retains world coordinates and adds `plant_<reporting_id>` object groups. Consumers undo the source transform to reuse geometry for border instances. Non-finite derived state becomes JSON null; canonical metrics keep their finite-value validation.
 
 `GET /api/health`, `GET /api/config`, `POST /api/setup`, `PUT /api/config` (`{revision, config}`), `GET/POST /api/runs` (create: `{revision, name}`), `GET /api/runs/{id}`, `POST /api/runs/{id}/cancel`, `GET /api/runs/{id}/events` (SSE), `/metrics`, `/logs`, and `/artifacts/{path}`. A save or run with a stale revision returns 409. `GET /api/config` also reports `adapter.version`, `required_version`, `compatible`, and `upgrade_available`. `POST /api/setup` installs or upgrades the adapter. Read-only `POST /api/inputs/preview` accepts `{plant_input, temperature_input}` and returns parameter definitions/source values, daily temperatures, and the source revision. Read-only `POST /api/layout/preview` accepts `{simulation, room, pattern, plant_spacing, row_spacing, center, rotation}` and returns resolved planting data; null spacing derives from density.
 
@@ -128,6 +134,8 @@ docker compose run --rm --no-deps \
 ```
 
 For version-1 upgrade and explicit-layout GPU checks, use the same isolated mounts with `python -m autotom.features_smoke` and a **fresh** check directory. This runs two-day migrated and custom staggered experiments, including moved border clones, nonsequential reporting IDs, parameter overrides, and daily temperatures.
+
+For inspection acceptance, run `python -m autotom.inspection_smoke --reference /reference --output /checks` with the same isolated mounts. It creates a fresh temporary model, runs two days with overlapping/elevated/rotated central plants and a border clone, checks all state fields against canonical metrics, and compares reconstructed clone vertices with GroIMP's original scene. It prints `INSPECTION_RUN_DIR`; pass the local path to that run directory to the browser suite to enable its real-artifact inspector test.
 
 For native-grid comparison, repeated-seed sampling checks, moved-lamp and opaque-panel tests, run the same command with `python -m autotom.acceptance` and a separate check directory. These checks copy and restore pristine sources from the adapter backup when necessary; they never modify the host model.
 

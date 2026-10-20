@@ -263,6 +263,22 @@ class InputPreviewResponse(StrictModel):
     revision: str
 
 
+class PlantStateField(StrictModel):
+    key: str
+    type: Literal['number', 'integer', 'boolean']
+    unit: str
+    group: str
+
+
+class InspectionMetadata(StrictModel):
+    version: Literal[1]
+    available_days: list[int]
+    fields: list[PlantStateField]
+    parameters: list[ParameterDefinition]
+    temperatures: list[Finite | None]
+    inputs_available: bool
+
+
 class ConfigurationResponse(StrictModel):
     config: Configuration
     revision: str

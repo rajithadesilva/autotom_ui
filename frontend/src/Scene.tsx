@@ -2,15 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
-import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import type { Config, SceneObject, Vec3 } from './types';
-import { artifactUrl } from './types';
+import { acquireDaily } from './geometry';
 import { itemsOf, isPlant, transformPoses, type Pose, type Item } from './editor';
 
 type Props = {
   config: Config; selected: string[]; mode: 'translate' | 'rotate'; tool: 'orbit' | 'box'; readOnly: boolean;
   result: { run: string; day: number } | null; showRoom: boolean;
+  inspecting?: boolean; inspectedId?: string | null;
+  onInspectionCandidates?: (ids: string[]) => void;
   onSelect: (ids: string[], additive?: boolean, expandGroups?: boolean) => void;
   onTransform: (poses: Pose[]) => void;
   onPivot: (pivot: Vec3) => void;
@@ -40,7 +40,7 @@ function material(color: string, opacity = 1) {
     side: THREE.DoubleSide, depthWrite: opacity === 1 });
 }
 
-function makeObject(obj: SceneObject): THREE.Group {
+export function makeObject(obj: SceneObject): THREE.Group {
   const group = new THREE.Group();
   group.userData.id = obj.id;
   group.position.fromArray(obj.position);
@@ -75,7 +75,7 @@ function roomPreview(config: Config, showRoom: boolean) {
   return group;
 }
 
-function makePlant(plant: Config['planting']['plants'][number], config: Config) {
+export function makePlant(plant: Config['planting']['plants'][number], config: Config, arrowVisible = true) {
   const group = new THREE.Group();
   group.userData.id = plant.id;
   group.position.fromArray(plant.position);
@@ -85,8 +85,8 @@ function makePlant(plant: Config['planting']['plants'][number], config: Config) 
   const height = Number(config.parameter_overrides.rockwool_height ?? .065);
   const block = new THREE.Mesh(new THREE.BoxGeometry(width,width,height),material(plant.role === 'border' ? '#897c58' : '#7aab64'));
   block.position.z = height/2;
-  const arrow = new THREE.ArrowHelper(new THREE.Vector3(1,0,0),new THREE.Vector3(0,0,height+.01),width*.7,plant.role === 'border' ? 0xc4a66a : 0xb8e68b,.025,.015);
-  group.add(block,arrow);
+  group.add(block);
+  if (arrowVisible) group.add(new THREE.ArrowHelper(new THREE.Vector3(1,0,0),new THREE.Vector3(0,0,height+.01),width*.7,plant.role === 'border' ? 0xc4a66a : 0xb8e68b,.025,.015));
   return group;
 }
 
@@ -98,6 +98,8 @@ export default function Scene(props: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(0);
+  const [resultReady, setResultReady] = useState(0);
+  const [identifiedResult, setIdentifiedResult] = useState(false);
   const [box, setBox] = useState<{x: number; y: number; width: number; height: number} | null>(null);
 
   useEffect(() => {
@@ -152,7 +154,7 @@ export default function Scene(props: Props) {
     transform.addEventListener('objectChange', previewTransform);
     transform.addEventListener('dragging-changed', event => {
       dragging = Boolean(event.value);
-      orbit.enabled = !event.value && propsRef.current.tool === 'orbit';
+      orbit.enabled = !event.value && (propsRef.current.tool === 'orbit' || Boolean(propsRef.current.inspecting));
       if (event.value) {
         center.copy(pivot.position);
         before = itemsOf(propsRef.current.config).filter(i => propsRef.current.selected.includes(i.id));
@@ -162,10 +164,11 @@ export default function Scene(props: Props) {
       }
     });
     const pointer = new THREE.Vector2(), ray = new THREE.Raycaster();
+    ray.params.Line.threshold = 0.005;
     let down = [0, 0], boxing = false, ignoreUp = false;
     const pointerDown = (event: PointerEvent) => {
       down = [event.clientX, event.clientY]; ignoreUp=false;
-      if (event.button !== 0 || propsRef.current.readOnly) return;
+      if (event.button !== 0 || propsRef.current.readOnly || propsRef.current.inspecting) return;
       if (propsRef.current.tool === 'box') {
         boxing=true;
         renderer.domElement.setPointerCapture(event.pointerId);
@@ -180,7 +183,7 @@ export default function Scene(props: Props) {
         width:Math.abs(event.clientX-down[0]),height:Math.abs(event.clientY-down[1]) });
     };
     const click = (event: PointerEvent) => {
-      if (event.button !== 0 || propsRef.current.readOnly || ignoreUp) return;
+      if (event.button !== 0 || (propsRef.current.readOnly && !propsRef.current.inspecting) || ignoreUp) return;
       const rect = element.getBoundingClientRect();
       const additive = event.shiftKey || event.ctrlKey || event.metaKey;
       if (boxing) {
@@ -195,13 +198,29 @@ export default function Scene(props: Props) {
         propsRef.current.onSelect(ids,additive,false);
         return;
       }
-      if (dragging || transform.axis || Math.hypot(event.clientX-down[0],event.clientY-down[1])>4) return;
+      if (dragging || (!propsRef.current.inspecting && transform.axis) || Math.hypot(event.clientX-down[0],event.clientY-down[1])>4) return;
       pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
       ray.setFromCamera(pointer, camera);
-      const hits = ray.intersectObjects([...objects.values()].filter(o => o.visible), true);
-      let object: THREE.Object3D | null = hits[0]?.object ?? null;
+      const targets: THREE.Object3D[] = [...objects.values()];
+      if (propsRef.current.inspecting) targets.push(...result.children);
+      const hits = ray.intersectObjects(targets.filter(o => o.visible), true);
+      const hit = hits[0];
+      let object: THREE.Object3D | null = hit?.object ?? null;
+      let resultHit = false;
+      // Older exports have no per-plant identity. A mesh hit must still open
+      // inspection, but proximity must not silently become an asserted identity.
+      for (let node: THREE.Object3D | null = object; node; node = node.parent) {
+        if (node === result) { resultHit = true; break; }
+      }
       while (object && !object.userData.id) object = object.parent;
-      propsRef.current.onSelect(object ? [object.userData.id] : [], additive);
+      if (!object && hit && resultHit && propsRef.current.inspecting && propsRef.current.onInspectionCandidates) {
+        const candidates = propsRef.current.config.planting.plants.filter(p => p.enabled)
+          .map(p => ({ id: p.id, distance: (p.position[0]-hit.point.x)**2 + (p.position[1]-hit.point.y)**2 }))
+          .sort((a,b) => a.distance-b.distance).map(p => p.id);
+        propsRef.current.onInspectionCandidates(candidates);
+        return;
+      }
+      propsRef.current.onSelect(object ? [object.userData.id] : [], propsRef.current.inspecting ? false : additive, !propsRef.current.inspecting);
     };
     const cancel = () => { boxing=false; setBox(null); };
     const escapeBox = (event:KeyboardEvent) => {if(event.key==='Escape'&&boxing) {ignoreUp=true;cancel();}};
@@ -228,7 +247,7 @@ export default function Scene(props: Props) {
       renderer.domElement.removeEventListener('pointermove',pointerMove);
       renderer.domElement.removeEventListener('pointercancel',cancel);
       window.removeEventListener('keydown',escapeBox);
-      transform.dispose(); orbit.dispose(); dispose(scene); renderer.dispose();
+      result.clear(); transform.dispose(); orbit.dispose(); dispose(scene); renderer.dispose();
       renderer.domElement.remove(); ctx.current = null;
     };
   }, []);
@@ -240,25 +259,25 @@ export default function Scene(props: Props) {
     dispose(context.world); context.objects.clear();
     context.world.add(roomPreview(props.config, props.showRoom));
     for (const object of itemsOf(props.config)) {
-      if (isPlant(object) && props.readOnly) continue;
-      const group = isPlant(object) ? makePlant(object,props.config) : makeObject(object);
+      if (isPlant(object) && props.readOnly && !identifiedResult) continue;
+      const group = isPlant(object) ? makePlant(object,props.config,!props.readOnly) : makeObject(object);
       context.objects.set(object.id, group);
       context.world.add(group);
     }
-  }, [props.config, props.showRoom, props.readOnly, ready]);
+  }, [props.config, props.showRoom, props.readOnly, identifiedResult, ready]);
 
   useEffect(() => {
     const context = ctx.current;
     if (!context) return;
     context.transform.setMode(props.mode);
-    context.orbit.enabled = props.tool === 'orbit' || props.readOnly;
+    context.orbit.enabled = props.tool === 'orbit' || props.readOnly || Boolean(props.inspecting);
     dispose(context.outlines);
     const selected = props.selected.map(id => context.objects.get(id)).filter((i): i is THREE.Group => Boolean(i));
     const upright = props.config.planting.plants.some(p => props.selected.includes(p.id));
     context.transform.showX = !(props.mode === 'rotate' && upright);
     context.transform.showY = !(props.mode === 'rotate' && upright);
     context.transform.showZ = true;
-    if (selected.length && !props.readOnly && props.tool !== 'box') {
+    if (selected.length && !props.readOnly && !props.inspecting && props.tool !== 'box') {
       const bounds = new THREE.Box3();
       for (const object of selected) bounds.union(new THREE.Box3().setFromObject(object));
       bounds.getCenter(context.pivot.position); context.pivot.quaternion.identity();
@@ -266,44 +285,26 @@ export default function Scene(props: Props) {
       context.pivot.updateMatrixWorld(true);
       context.transform.attach(context.pivot);
     } else context.transform.detach();
-    if (!props.readOnly) for (const object of selected.filter(o=>o.visible)) context.outlines.add(new THREE.BoxHelper(object,0xb7e68b));
-  }, [props.selected, props.mode, props.config, props.readOnly, props.tool, ready]);
+    if (props.inspecting && props.inspectedId) {
+      const object = context.result.getObjectByName(props.inspectedId) || context.objects.get(props.inspectedId);
+      if (object?.visible) context.outlines.add(new THREE.BoxHelper(object,0xb7e68b));
+    } else if (!props.readOnly) for (const object of selected.filter(o=>o.visible)) context.outlines.add(new THREE.BoxHelper(object,0xb7e68b));
+  }, [props.selected, props.mode, props.config, props.readOnly, props.tool, props.inspecting, props.inspectedId, ready, resultReady]);
 
   useEffect(() => {
     const context = ctx.current;
     if (!context) return;
-    dispose(context.result); setError('');
+    context.result.clear(); setError(''); setIdentifiedResult(false); setResultReady(n => n + 1);
     if (!props.result) { setLoading(false); return; }
-    let cancelled = false;
     const controller = new AbortController();
-    const base = artifactUrl(props.result.run, `days/${String(props.result.day).padStart(4, '0')}/`);
     setLoading(true);
-    (async () => {
-      const response = await fetch(base + 'plants.obj', { signal: controller.signal });
-      if (!response.ok) throw new Error('Daily plant geometry is not available');
-      const text = await response.text();
-      const loader = new OBJLoader();
-      const mtlFile = /^mtllib\s+(.+)$/m.exec(text)?.[1].trim();
-      if (mtlFile) {
-        if (mtlFile.includes('/') || mtlFile.includes('\\') || mtlFile.includes('..')) throw new Error('Invalid material filename in plant export');
-        const mtlResponse = await fetch(base + encodeURIComponent(mtlFile), { signal: controller.signal });
-        if (mtlResponse.ok) {
-          const materials = new MTLLoader().parse(await mtlResponse.text(), base);
-          materials.preload(); loader.setMaterials(materials);
-        }
-      }
-      const model = loader.parse(text);
-      if (cancelled) { dispose(model); return; }
-      model.traverse(child => {
-        if (child instanceof THREE.Mesh) {
-          const mats = Array.isArray(child.material) ? child.material : [child.material];
-          mats.forEach(mat => { mat.side = THREE.DoubleSide; });
-        }
-      });
-      context.result.add(model);
-      setLoading(false);
-    })().catch(e => { if (!cancelled) { setLoading(false); setError(e.message); } });
-    return () => { cancelled = true; controller.abort(); };
+    acquireDaily(props.result.run, props.result.day, controller.signal).then(asset => {
+      if (controller.signal.aborted) return;
+      context.result.add(asset.model.clone(true));
+      setIdentifiedResult(Boolean(asset.manifest));
+      setLoading(false); setResultReady(n => n + 1);
+    }).catch(e => { if (!controller.signal.aborted) { setLoading(false); setError(e.message); } });
+    return () => { context.result.clear(); controller.abort(); };
   }, [props.result?.run, props.result?.day, ready]);
 
   function fit() {

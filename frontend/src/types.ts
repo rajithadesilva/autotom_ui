@@ -44,6 +44,10 @@ export type Metric = {
   leaf_area_m2: number; par_umol_s: number; par_mmol_day: number; carbon_mmol_day: number;
 };
 export type DailyResult = { day: number; plants: Metric[] };
+export type StateField = { key: string; type: 'number' | 'integer' | 'boolean'; unit: string; group: string };
+export type InspectionInstance = { id: string; geometry: string; source_id: string; matrix: number[]; state: Record<string, number | boolean | null> | null };
+export type InspectionDay = { version: 1; day: number; instances: InspectionInstance[] };
+export type InspectionMetadata = { version: 1; available_days: number[]; fields: StateField[]; parameters: Parameter[]; temperatures: (number | null)[]; inputs_available: boolean };
 export type Health = { status: string; worker: { ready: boolean; error?: string | null; gpu?: string | null; groimp?: string | null } };
 export const artifactUrl = (id: string, path: string) => `/api/runs/${id}/artifacts/${path}`;
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {

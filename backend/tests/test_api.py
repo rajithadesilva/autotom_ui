@@ -55,7 +55,7 @@ def test_api_run_snapshot_cancel_and_artifact_paths(client):
 def test_input_and_layout_preview_are_read_only_and_validate_inputs(client):
     c, main, data = client
     initial=c.get('/api/config').json()
-    assert initial['adapter']=={'version':2,'required_version':2,'compatible':True,'upgrade_available':False}
+    assert initial['adapter']=={'version':3,'required_version':3,'compatible':True,'upgrade_available':False}
     sim=initial['config']['simulation']
     response=c.post('/api/inputs/preview',json={'plant_input':sim['plant_input'],'temperature_input':sim['temperature_input']})
     assert response.status_code==200
@@ -198,3 +198,23 @@ def test_run_rename_persists_only_name_and_validates_input(client, status):
     assert c.patch(f'/api/runs/{identifier}', json={'name': 'Blocked'}, headers={'Origin': 'http://attacker.example'}).status_code == 403
     assert c.patch('/api/runs/missing', json={'name': 'Unknown'}).status_code == 404
     assert main.store.get(identifier) == expected
+
+
+def test_inspection_endpoint_reads_only_run_snapshot_and_handles_legacy_missing_inputs(client):
+    c, main, data = client
+    (data / 'worker.json').write_text(json.dumps({'ready': True}))
+    config = c.get('/api/config').json()
+    run = c.post('/api/runs', json={'revision':config['revision'],'name':'Inspect'}).json()
+    endpoint = f"/api/runs/{run['id']}/inspection"
+    response = c.get(endpoint)
+    assert response.status_code == 200
+    metadata = response.json()
+    assert metadata['version'] == 1 and metadata['available_days'] == []
+    assert metadata['inputs_available'] and len(metadata['fields']) == 74
+    assert c.get('/api/config').json()['revision'] == config['revision']
+    import shutil
+    shutil.rmtree(data / 'runs' / run['id'] / 'model' / 'input')
+    assert c.get(endpoint).json() == metadata
+    (data / 'runs' / run['id'] / 'inspection-inputs.json').unlink()
+    assert c.get(endpoint).json()['inputs_available'] is False
+    assert c.get('/api/runs/missing/inspection').status_code == 404

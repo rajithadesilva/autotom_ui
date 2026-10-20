@@ -12,6 +12,7 @@ from pathlib import Path
 from .adapter import atomic_write
 from .schema import DailyResult, Metric
 from .geometry import normalize_obj
+from .inspection import publish_inspection
 from .store import Store, now
 
 DATA = Path(os.getenv("DATA_DIR", "/data"))
@@ -66,8 +67,13 @@ def publish_days(store: Store, run):
         stage = target / ("." + day.name)
         shutil.rmtree(stage, ignore_errors=True)
         shutil.copytree(day, stage)
-        for filename in ("scene.obj", "plants.obj"):
-            normalize_obj(day / filename, stage / filename)
+        provenance = root / 'provenance.json'
+        inspection_required = provenance.exists() and json.loads(provenance.read_text()).get('adapter_version', 0) >= 3
+        normalize_obj(day / 'scene.obj', stage / 'scene.obj')
+        if inspection_required or (day / 'instances.csv').exists():
+            publish_inspection(day, stage, config, int(day.name))
+        else:
+            normalize_obj(day / 'plants.obj', stage / 'plants.obj')
         atomic_write(stage / "metrics.json", result.model_dump_json())
         with zipfile.ZipFile(stage / "scene.zip", "w", zipfile.ZIP_DEFLATED) as archive:
             for path in stage.iterdir():

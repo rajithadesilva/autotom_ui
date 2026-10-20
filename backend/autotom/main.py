@@ -10,12 +10,13 @@ from .adapter import Conflict, ModelError
 from .project import Project
 from .schema import (CreateRun, SaveConfiguration, ConfigurationResponse, DailyResult,
                      RunRecord, RunDetail, HealthResponse, LogResponse, InputPreviewRequest, InputPreviewResponse, LayoutRequest, Planting,
-                     CreateSavedConfiguration, SavedConfiguration, RenameRun)
+                     CreateSavedConfiguration, SavedConfiguration, RenameRun, InspectionMetadata)
 from .configurations import Configurations
 from .store import Store
 from .parameters import preview
 from .layout import generate_layout
 from .adapter import revision
+from .inspection import inspection_metadata
 
 DATA = Path(os.getenv("DATA_DIR", "/data"))
 store = Store(DATA)
@@ -188,6 +189,12 @@ def metrics(identifier: str):
     run = run_detail(identifier)
     return [json.loads((store.runs / identifier / "days" / f"{day:04d}" / "metrics.json").read_text())
             for day in run["available_days"]]
+
+
+@app.get('/api/runs/{identifier}/inspection', response_model=InspectionMetadata)
+def inspection(identifier: str):
+    run = run_detail(identifier)
+    return inspection_metadata(store.runs / identifier, run['config'])
 
 
 @app.get("/api/runs/{identifier}/logs", response_model=LogResponse)

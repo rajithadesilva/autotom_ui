@@ -66,6 +66,7 @@ async function mockApi(page: Page, options: { installed?: boolean; status?: Run[
       run = {...run, name: route.request().postDataJSON().name};
       runs = runs.map(item => item.id === run.id ? run : item); return json(run);
     }
+    if (path.endsWith('inspection.json')) return json({detail:'Legacy run'},404);
     if (path.endsWith('plants.obj')) return route.fulfill({ contentType: 'text/plain', body: 'v 0.5 0.5 0.065 0.2 0.6 0.1\nv 0.6 0.5 0.4 0.2 0.6 0.1\nv 0.7 0.5 0.065 0.2 0.6 0.1\nf 1 2 3\n' });
     if (path.startsWith('/api/runs/')) return json(run);
     return json({ detail: 'Unknown test route' }, 404);

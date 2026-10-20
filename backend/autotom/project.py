@@ -3,8 +3,9 @@ import json
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from .adapter import Conflict, GENERATED_FILES, ModelError, atomic_write, adapter_status, install, read_config, revision, validate_inputs, write_config
+from .adapter import ADAPTER_VERSION, Conflict, GENERATED_FILES, ModelError, atomic_write, adapter_status, install, read_config, revision, validate_inputs, write_config
 from .store import Store, run_id
+from .inspection import STATE_FIELDS, snapshot_inputs
 
 
 class Project:
@@ -71,8 +72,11 @@ class Project:
                 if revision(self.model) != expected or revision(pending / "model") != expected:
                     raise Conflict("Model files changed while taking the run snapshot. Reload and try again.")
                 atomic_write(pending / "config.json", config.model_dump_json(indent=2))
+                atomic_write(pending / 'inspection-inputs.json', json.dumps({
+                    'version': 1, 'fields': STATE_FIELDS,
+                    **snapshot_inputs(pending / 'model', config.model_dump(mode='json'))}, allow_nan=False))
                 atomic_write(pending / "provenance.json", json.dumps({"source_revision": expected,
-                    "adapter_version": 2, "groimp": "2.2", "java": "21", "coordinates": "Z-up, metres, Euler XYZ degrees"}, indent=2))
+                    "adapter_version": adapter_status(self.model)['version'] or ADAPTER_VERSION, "groimp": "2.2", "java": "21", "coordinates": "Z-up, metres, Euler XYZ degrees"}, indent=2))
                 pending.rename(final)
                 return self.store.create(identifier, name, expected, config)
         except Exception:

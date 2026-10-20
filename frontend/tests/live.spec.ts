@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import * as THREE from 'three';
 import type { Run } from '../src/types';
 
 test('scene objects match real saved run snapshots after switching and reload', async ({ page, request }) => {
@@ -119,4 +120,52 @@ test('restoring an older saved run stays visible after live updates and reload',
     await expect(page.locator('.run-progress')).toBeVisible();
     expect(errors).toEqual([]);
   }
+});
+
+
+test('legacy plant surface opens inspection on the running app', async ({page,request}) => {
+  test.skip(process.env.LIVE !== '1','Enable LIVE=1 for read-only checks against the running application');
+  const runs=await (await request.get('/api/runs')).json() as Run[];
+  let legacy:Run|undefined;
+  for(const run of runs.filter(r=>r.current_day>0)){
+    const info=await (await request.get('/api/runs/'+run.id+'/inspection')).json();
+    if(!info.available_days.length){legacy=run;break;}
+  }
+  test.skip(!legacy,'A legacy run is needed for this check');
+  const run=legacy!, plant=run.config.planting.plants.find(p=>p.enabled&&p.role==='central')!;
+  const before=JSON.stringify(await (await request.get('/api/runs/'+run.id)).json());
+  const errors:string[]=[],writes:string[]=[];
+  page.on('pageerror',e=>errors.push(e.message));
+  page.on('request',r=>{if(r.method()!=='GET'&&r.url().includes('/api/')&&!r.url().endsWith('/inputs/preview'))writes.push(r.url());});
+  // Loading day 1 is sufficient to test real picking without parsing a mature
+  // combined mesh that can exceed 400 MB.
+  await page.route(/\/days\/(?!0001\/)/,route=>route.abort());
+  await page.goto('/');
+  await page.locator('.run-row').filter({hasText:run.name}).click();
+  const slider=page.getByLabel('Simulation day',{exact:true});
+  await expect(slider).toBeEnabled();
+  await expect(page.locator('.timeline-day strong')).toHaveText(`Day ${run.current_day}`);
+  await slider.focus();await slider.press('Home');
+  await expect(page.locator('.timeline-day strong')).toHaveText('Day 1');
+  await page.getByRole('button',{name:'Inspect objects'}).click();
+  const scene=page.getByLabel('3D scene viewer',{exact:true});
+  await expect(scene.locator('.scene-message')).toHaveCount(0,{timeout:30000});
+  await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
+  const rect=(await scene.boundingBox())!;
+  const camera=new THREE.PerspectiveCamera(42,rect.width/rect.height,.005,500);
+  camera.up.set(0,0,1);camera.position.set(2.5,-2.8,2.2);camera.lookAt(.6,.6,.3);camera.updateMatrixWorld();
+  const point=new THREE.Vector3(plant.position[0],plant.position[1],plant.position[2]+.03).project(camera);
+  await page.mouse.click(rect.x+(point.x+1)/2*rect.width,rect.y+(1-point.y)/2*rect.height);
+  const inspector=page.getByRole('complementary',{name:'Object inspection'});
+  const choices=inspector.getByLabel('Choose a plant to inspect',{exact:true});
+  await expect(choices).toBeVisible();
+  await expect(choices.getByRole('button')).toHaveCount(run.config.planting.plants.filter(p=>p.enabled).length);
+  const first=choices.getByRole('button').first(), name=await first.locator('span').innerText();
+  await first.click();
+  await expect(inspector.getByRole('heading',{name,exact:true})).toBeVisible();
+  await expect(inspector).toContainText('Daily metrics');
+  await expect(inspector.locator('.inspection-timeline strong')).toHaveText('Day 1');
+  await page.screenshot({path:'/tmp/autotom-inspection-click-live.png',fullPage:true});
+  expect(errors).toEqual([]);expect(writes).toEqual([]);
+  expect(JSON.stringify(await (await request.get('/api/runs/'+run.id)).json())).toBe(before);
 });

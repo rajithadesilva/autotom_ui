@@ -1,4 +1,15 @@
-# Validation record — 19 October 2026
+# Validation record
+
+## Object inspection — 20 October 2026
+
+- Follow-up plant-click fix: legacy combined meshes open an explicit plant chooser ordered by proximity, without asserting an inferred identity. Nine inspector regression tests and a read-only browser check against the running **High LED 1** saved simulation passed. The web image was rebuilt and the web container updated; saved results were unchanged.
+- 68 backend tests passed, including verified v1/v2 adapter upgrades, snapshot-only inspection inputs, complete plant-state coverage, clone identity, and refusal to publish corrupt or incomplete inspection days.
+- 43 browser tests passed, including simulation surface picking, independent/synchronized sparse timelines, playback, stale-request cancellation, legacy fallback, isolated camera interaction, mobile stacking, and real v3 GroIMP artifacts.
+- TypeScript checking and the production Vite build passed. Build artifacts were written under `/tmp` for validation.
+- The isolated two-day GPU acceptance run completed with overlapping central plants, reporting IDs 3 and 9, rotation/elevation, and a border clone. All 74 primitive PlantBase fields matched the exported contract; biomass state agreed with canonical daily metrics. Reconstructed clone vertices matched original GroIMP output within 0.00001213 m.
+- Reproduce the GPU check with `python -m autotom.inspection_smoke --reference /reference --output /checks`. Use its printed run directory as `INSPECTION_RUN_DIR` for the real-artifact browser test. Existing host models and saved runs were left unchanged during validation.
+
+## Original validation — 19 October 2026
 
 The application was built and run entirely in Docker on an NVIDIA GeForce RTX 4070 Laptop GPU (driver 595.91.07, Docker 29.7.2). The worker uses GroIMP 2.2, Java 21, and the bundled GPUFlux 2.1.6 engine, with the documented diagnostic-parser compatibility patch.
 

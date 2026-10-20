@@ -1,0 +1,446 @@
+[
+  {
+    "key": "age_in_degree_days_dd",
+    "type": "number",
+    "unit": "\u00b0C\u00b7day",
+    "group": "growth"
+  },
+  {
+    "key": "age_in_days_d",
+    "type": "integer",
+    "unit": "days",
+    "group": "growth"
+  },
+  {
+    "key": "row",
+    "type": "integer",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "pos",
+    "type": "integer",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "plant_number",
+    "type": "integer",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "PAR_absorbed_per_plant_leaves_second_umol",
+    "type": "number",
+    "unit": "\u00b5mol/s",
+    "group": "light"
+  },
+  {
+    "key": "PAR_absorbed_per_plant_all_second_umol",
+    "type": "number",
+    "unit": "\u00b5mol/s",
+    "group": "light"
+  },
+  {
+    "key": "cumulative_PAR_absorbed_per_plant_umol",
+    "type": "number",
+    "unit": "\u00b5mol",
+    "group": "light"
+  },
+  {
+    "key": "carbon_assimilation_plant_daily_umol",
+    "type": "number",
+    "unit": "\u00b5mol/day",
+    "group": "carbon"
+  },
+  {
+    "key": "carbon_assimilation_plant_leaves_daily_umol",
+    "type": "number",
+    "unit": "\u00b5mol/day",
+    "group": "carbon"
+  },
+  {
+    "key": "carbon_assimilation_plant_second_umol",
+    "type": "number",
+    "unit": "\u00b5mol/s",
+    "group": "carbon"
+  },
+  {
+    "key": "carbon_assimilation_plant_leaves_second_umol",
+    "type": "number",
+    "unit": "\u00b5mol/s",
+    "group": "carbon"
+  },
+  {
+    "key": "assimilates_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "assimilates_if_just_leaves_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "cumulative_carbon_assimilation_plant_umol",
+    "type": "number",
+    "unit": "\u00b5mol",
+    "group": "carbon"
+  },
+  {
+    "key": "cumulative_gross_assimmilates_plant_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "cumulative_maintenance_demand_plant_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "cumulative_assimilates_plant_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "reserve_pool_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "sink_strength_per_day_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "above_ground_organs_sink_strength",
+    "type": "number",
+    "unit": "",
+    "group": "carbon"
+  },
+  {
+    "key": "above_ground_organs_sink_strength_just_for_growth_and_not_respiration_growth_for_calculating_root_fraction",
+    "type": "number",
+    "unit": "",
+    "group": "carbon"
+  },
+  {
+    "key": "dry_biomass_roots",
+    "type": "number",
+    "unit": "",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_plant_above_ground_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_leaf_blades",
+    "type": "number",
+    "unit": "",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_internodes",
+    "type": "number",
+    "unit": "",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_plant_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_plant_with_roots_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_structural_and_min_pool_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_plant_above_ground_vegetative_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_assimilates_and_available_buffer_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "dry_biomass_total_buffer_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "total_blades_dry_biomass_structural_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_leaves",
+    "type": "number",
+    "unit": "",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_stems",
+    "type": "number",
+    "unit": "",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_fruits_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "fresh_biomass_fruits_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "nr_internodes",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "root_shoot",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "leafArea",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "flowering",
+    "type": "boolean",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "extending",
+    "type": "boolean",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "initialAngle",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "test_appearance",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "dry_biomass_growth_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "relative_growth_rate",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "relative_growth_rate_last_5_days",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "previous_day_dry_biomass_plant_with_roots_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "temp_1",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "temp_2",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "temp_3",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "temp_4",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "temp_5",
+    "type": "number",
+    "unit": "",
+    "group": "growth"
+  },
+  {
+    "key": "gross_assimmilates_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "gross_assimmilates_just_leaves_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "maintenance_demand_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  },
+  {
+    "key": "dry_biomass_leaf_blades_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_leaf_blades_order_0_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_leaf_blades_order_1_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_leaves_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_leaves_0_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_leaves_1_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_internodes_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_internodes_0_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_internodes_1_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "dry_biomass_truss_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "fresh_biomass_fruits_harvested_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "biomass"
+  },
+  {
+    "key": "leaf_blade_area_m2",
+    "type": "number",
+    "unit": "m\u00b2",
+    "group": "growth"
+  },
+  {
+    "key": "leaf_blade_area_order_0_m2",
+    "type": "number",
+    "unit": "m\u00b2",
+    "group": "growth"
+  },
+  {
+    "key": "leaf_blade_area_order_1_m2",
+    "type": "number",
+    "unit": "m\u00b2",
+    "group": "growth"
+  },
+  {
+    "key": "leaf_area_m2",
+    "type": "number",
+    "unit": "m\u00b2",
+    "group": "growth"
+  },
+  {
+    "key": "leaf_area_order_0_m2",
+    "type": "number",
+    "unit": "m\u00b2",
+    "group": "growth"
+  },
+  {
+    "key": "leaf_area_order_1_m2",
+    "type": "number",
+    "unit": "m\u00b2",
+    "group": "growth"
+  },
+  {
+    "key": "assimilates_to_growth_mg",
+    "type": "number",
+    "unit": "mg",
+    "group": "carbon"
+  }
+]

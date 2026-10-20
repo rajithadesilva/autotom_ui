@@ -121,7 +121,7 @@ def test_upgrade_preserves_config_original_backup_and_unrelated_source(model):
     c=read_config(model)
     assert c.version==2 and c.objects[0].power_w==12
     state=json.loads((model/'.autotom-adapter.json').read_text())
-    assert state['version']==2 and state['backup']==str(original.relative_to(model))
+    assert state['version']==adapter.ADAPTER_VERSION and state['backup']==str(original.relative_to(model))
     assert (model/state['previous_backup']/'autotom.json').exists()
     assert unrelated.read_bytes().endswith(b'// custom\n')
     before=revision(model);install(model);assert revision(model)==before
