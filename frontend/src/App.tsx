@@ -56,7 +56,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadProject().catch(e => setError(e.message));
+    const openingProject = loadProject().catch(e => setError(e.message));
     api<SavedConfiguration[]>('/configurations').then(setSavedConfigurations).catch(e => setError(e.message));
     async function refresh() {
       try {
@@ -67,7 +67,9 @@ export default function App() {
           const id = localStorage.getItem('autotom-selected-run');
           if (id && r.some(item => item.id === id)) {
             const previous = await api<Run>(`/runs/${id}`);
-            setRun(previous); setDay(previous.available_days?.at(-1) || 1); setView('result');
+            await openingProject;
+            openRun(previous);
+            setView('result');
           }
         }
       } catch (e) { setError((e as Error).message); }
@@ -127,12 +129,13 @@ export default function App() {
     const p = await api<ConfigResponse>('/config', { method: 'PUT', body: JSON.stringify({ revision: project!.revision, config: nextConfig }) });
     setProject(p); history.sync(p.config); return p;
   }
+  function openRun(next: Run) {
+    history.set(next.config); setConfigurationId('');
+    localStorage.setItem('autotom-selected-run', next.id);
+    setRun(next); setData([]); setDay(next.available_days?.at(-1) || 1); setPlant('mean'); setPlaying(false);
+  }
   function selectRun(id: string) {
-    action(async () => {
-      const next = await api<Run>(`/runs/${id}`);
-      localStorage.setItem('autotom-selected-run', id);
-      setRun(next); setData([]); setDay(next.available_days?.at(-1) || 1); setPlant('mean'); setPlaying(false); setView('result');
-    });
+    action(async () => openRun(await api<Run>(`/runs/${id}`)));
   }
   function clearRun() {
     localStorage.removeItem('autotom-selected-run');
@@ -270,10 +273,10 @@ export default function App() {
       </aside>
 
       <main className="main-panel"><div className="viewport-topbar"><div className="view-tabs"><button className={view === 'preview' ? 'active' : ''} onClick={() => setView('preview')}>Scene editor</button>
-        <button className={view === 'result' ? 'active' : ''} disabled={!run} onClick={() => setView('result')}>Simulation result</button>
+        <button className={view === 'result' ? 'active' : ''} disabled={!run} onClick={() => setView('result')}>Simulation</button>
         <button className={view === 'compare' ? 'active' : ''} onClick={() => { setView('compare'); setPlaying(false); }}>Compare</button></div>
         {view !== 'compare' && <div className="config-buttons">{([['lights', Lightbulb, 'Lights'], ['surroundings', Box, 'Surroundings'], ['plants', Sprout, 'Plants'], ['parameters', Leaf, 'Model parameters'], ['simulation', Settings2, 'Simulation']] as const).map(([key, Icon, label]) =>
-          <button key={key} aria-label={label} title={label} className={`config-button ${pane === key ? 'active' : ''}`} onClick={() => { setPane(pane === key ? null : key); if (pane !== key) setView('preview'); }}><Icon size={14} /><span>{label}</span></button>)}</div>}</div>
+          <button key={key} aria-label={key === 'simulation' ? 'Simulation settings' : label} title={key === 'simulation' ? 'Simulation settings' : label} className={`config-button ${pane === key ? 'active' : ''}`} onClick={() => { setPane(pane === key ? null : key); if (pane !== key) setView('preview'); }}><Icon size={14} /><span>{label}</span></button>)}</div>}</div>
         {view === 'compare' ? <Compare runs={runs} selection={comparison} onSelection={setComparison} preferredRun={run?.id} /> : <>
         <div className="viewport"><Scene config={displayConfig} selected={selected} mode={mode} tool={tool} readOnly={view==='result'} result={hasResult && run ? { run: run.id, day } : null} showRoom={showRoom} onSelect={selectScene} onTransform={transformObjects} onPivot={updatePivot} />
           <div className="viewport-label"><span className="status-dot" />{hasResult ? `SIMULATION · DAY ${day}` : view === 'result' && run ? 'AWAITING DAILY OUTPUT' : 'ENVIRONMENT PREVIEW'}

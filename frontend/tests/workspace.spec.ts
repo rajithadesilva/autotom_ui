@@ -73,6 +73,29 @@ async function mockApi(page: Page, options: { installed?: boolean; status?: Run[
   return { getSaved: () => saved };
 }
 
+async function mockRunSnapshots(page: Page) {
+  const state = await mockApi(page);
+  const snapshots = ['a', 'b'].map((id, index): Run => {
+    const snapshot = structuredClone(config);
+    snapshot.objects = Array.from({length:index + 1}, (_, i) => ({
+      ...snapshot.objects[0], id:`${id}-led-${i}`, name:`Run ${id} LED ${i}`, power_w:10 + index,
+    }));
+    snapshot.planting.plants[0] = {...snapshot.planting.plants[0], id:`${id}-plant`, name:`Run ${id} plant`};
+    snapshot.groups = [{id:`${id}-group`, name:`Run ${id} group`, members:[snapshot.objects[0].id, `${id}-plant`]}];
+    return {id, name:`Experiment ${id}`, status:index ? 'queued' : 'completed', created_at:'2026-10-19T10:00:00Z',
+      started_at:null, finished_at:null, days:3, current_day:index ? 0 : 3, cancel_requested:false, error:null,
+      revision:'r1', config:snapshot, available_days:index ? [] : [1, 2, 3]};
+  });
+  await page.route('**/api/runs', route => route.fulfill({json:snapshots}));
+  await page.route(/\/api\/runs\/[ab](\/events)?$/, route => {
+    const snapshot = snapshots.find(run => run.id === new URL(route.request().url()).pathname.split('/')[3])!;
+    return route.request().url().endsWith('/events')
+      ? route.fulfill({contentType:'text/event-stream', body:`data: ${JSON.stringify(snapshot)}\n\n`})
+      : route.fulfill({json:snapshot});
+  });
+  return {state, snapshots};
+}
+
 async function mockComparison(page: Page, options: { count?: number; emptyB?: boolean; failB?: boolean } = {}) {
   await mockApi(page);
   const runs: Run[] = ['a', 'b', 'c'].slice(0, options.count ?? 3).map((id, index) => ({
@@ -231,35 +254,40 @@ test('new run opens an editable draft and finished runs can be deleted', async (
   await expect(page.getByRole('status')).toContainText('Run and its results deleted');
 });
 
-test('scene objects and selection follow run snapshots while preserving the editor draft', async ({ page }) => {
-  const state = await mockApi(page);
-  const snapshots = ['a', 'b'].map((id, index): Run => {
-    const snapshot = structuredClone(config);
-    snapshot.objects = Array.from({length:index + 1}, (_, i) => ({
-      ...snapshot.objects[0], id:`${id}-led-${i}`, name:`Run ${id} LED ${i}`, power_w:10 + index,
-    }));
-    snapshot.planting.plants[0] = {...snapshot.planting.plants[0], id:`${id}-plant`, name:`Run ${id} plant`};
-    snapshot.groups = [{id:`${id}-group`, name:`Run ${id} group`, members:[snapshot.objects[0].id, `${id}-plant`]}];
-    return {id, name:`Experiment ${id}`, status:index ? 'queued' : 'completed', created_at:'2026-10-19T10:00:00Z',
-      started_at:null, finished_at:null, days:3, current_day:index ? 0 : 3, cancel_requested:false, error:null,
-      revision:'r1', config:snapshot, available_days:index ? [] : [1, 2, 3]};
+for (const mobile of [false, true]) for (const tab of ['Scene editor', 'Simulation', 'Compare']) {
+  test(`switching saved runs preserves ${tab} on ${mobile ? 'mobile' : 'desktop'}`, async ({ page }) => {
+    if (mobile) await page.setViewportSize({width:390,height:844});
+    await mockRunSnapshots(page);
+    await page.goto('/');
+    async function selectRun(id: string) {
+      if (mobile) await page.getByLabel('Saved runs', {exact:true}).selectOption(id);
+      else await page.locator('.run-row').filter({hasText:`Experiment ${id}`}).click();
+      await expect(page.locator('.run-row.selected')).toContainText(`Experiment ${id}`);
+    }
+    await selectRun('a');
+    await page.getByRole('button', {name:tab,exact:true}).click();
+    for (const id of ['b', 'a']) {
+      await selectRun(id);
+      await expect(page.getByRole('button', {name:tab,exact:true})).toHaveClass('active');
+      await expect(page.getByLabel('Scene item selection', {exact:true}).locator('.item-name')).toContainText([`Run ${id} LED 0`, `Run ${id} plant`]);
+    }
+    if (tab === 'Compare') await expect(page.getByLabel('Compare run A', {exact:true})).toHaveValue('a');
   });
-  await page.route('**/api/runs', route => route.fulfill({json:snapshots}));
-  await page.route(/\/api\/runs\/[ab](\/events)?$/, route => {
-    const snapshot = snapshots.find(run => run.id === new URL(route.request().url()).pathname.split('/')[3])!;
-    return route.request().url().endsWith('/events')
-      ? route.fulfill({contentType:'text/event-stream', body:`data: ${JSON.stringify(snapshot)}\n\n`})
-      : route.fulfill({json:snapshot});
-  });
+}
+
+test('selected runs initialize the scene editor and keep subsequent edits separate from simulation snapshots', async ({ page }) => {
+  const {state} = await mockRunSnapshots(page);
   await page.goto('/');
   await page.getByRole('button', {name:'LED 1',exact:true}).click();
   await page.getByLabel('Emitted power', {exact:true}).fill('27');
   await page.getByLabel('Emitted power', {exact:true}).press('Tab');
   const objects = page.getByLabel('Scene item selection', {exact:true});
   const count = page.locator('.sidebar-title').filter({has:page.getByRole('heading', {name:'Scene objects',exact:true})}).locator('span');
-  const resultTab = page.getByRole('button', {name:'Simulation result',exact:true});
+  const resultTab = page.getByRole('button', {name:'Simulation',exact:true});
 
   await page.locator('.run-row').filter({hasText:'Experiment a'}).click();
+  await expect(page.getByRole('button', {name:'Scene editor',exact:true})).toHaveClass('active');
+  await resultTab.click();
   await expect(count).toHaveText('2');
   await expect(objects.locator('.object-row .item-name')).toHaveText(['Run a LED 0', 'Run a plant']);
   await expect(objects.getByRole('button', {name:'Run a group · 2',exact:true})).toBeVisible();
@@ -275,29 +303,50 @@ test('scene objects and selection follow run snapshots while preserving the edit
   await objects.getByRole('button', {name:'Run a group · 2',exact:true}).click();
   await expect(page.getByLabel('Group name', {exact:true})).toHaveValue('Run a group');
   await expect(page.getByLabel('Group name', {exact:true})).toBeDisabled();
+  await page.getByRole('button', {name:'Scene editor',exact:true}).click();
+  await expect(objects.locator('.object-row .item-name')).toHaveText(['Run a LED 0', 'Run a plant']);
+  await expect(page.getByLabel('Group name', {exact:true})).toHaveValue('Run a group');
+  await expect(page.getByLabel('Group name', {exact:true})).toBeEnabled();
 
   await page.locator('.run-row').filter({hasText:'Experiment b'}).click();
+  await expect(page.getByRole('button', {name:'Scene editor',exact:true})).toHaveClass('active');
   await expect(count).toHaveText('3');
   await expect(objects.locator('.object-row .item-name')).toHaveText(['Run b LED 0', 'Run b plant', 'Run b LED 1']);
   await expect(objects.getByRole('checkbox', {checked:true})).toHaveCount(0);
   await expect(page.getByLabel('Group name', {exact:true})).toHaveCount(0);
+  await resultTab.click();
   await expect(page.locator('.viewport-label')).toContainText('AWAITING DAILY OUTPUT');
   await objects.getByRole('button', {name:'Run b LED 1',exact:true}).click();
   await expect(page.getByLabel('Emitted power', {exact:true})).toHaveValue('11');
   await expect(page.getByLabel('Emitted power', {exact:true})).toBeDisabled();
 
   await page.getByRole('button', {name:'Scene editor',exact:true}).click();
-  await expect(objects.locator('.object-row .item-name')).toHaveText(['LED 1', 'Plant 1']);
-  await expect(count).toHaveText('2');
-  await objects.getByRole('button', {name:'LED 1',exact:true}).click();
-  await expect(page.getByLabel('Emitted power', {exact:true})).toHaveValue('27');
+  await expect(objects.locator('.object-row .item-name')).toHaveText(['Run b LED 0', 'Run b plant', 'Run b LED 1']);
+  await expect(count).toHaveText('3');
+  await expect(page.getByLabel('Emitted power', {exact:true})).toHaveValue('11');
   await expect(page.getByLabel('Emitted power', {exact:true})).toBeEnabled();
+  await page.getByLabel('Emitted power', {exact:true}).fill('17');
+  await page.getByLabel('Emitted power', {exact:true}).press('Tab');
+  await resultTab.click();
+  await expect(page.getByLabel('Emitted power', {exact:true})).toHaveValue('11');
+  await expect(page.getByLabel('Emitted power', {exact:true})).toBeDisabled();
+  await page.getByRole('button', {name:'Scene editor',exact:true}).click();
+  await expect(page.getByLabel('Emitted power', {exact:true})).toHaveValue('17');
+  await page.getByRole('button', {name:'Undo',exact:true}).click();
+  await expect(page.getByLabel('Emitted power', {exact:true})).toHaveValue('11');
+  await page.getByRole('button', {name:'Redo',exact:true}).click();
+  await expect(page.getByLabel('Emitted power', {exact:true})).toHaveValue('17');
   expect(state.getSaved().objects[0].power_w).toBe(43.8);
 
   await page.reload();
   await expect(resultTab).toHaveClass('active');
   await expect(count).toHaveText('3');
   await expect(objects.locator('.object-row .item-name')).toHaveText(['Run b LED 0', 'Run b plant', 'Run b LED 1']);
+  await page.getByRole('button', {name:'Scene editor',exact:true}).click();
+  await expect(objects.locator('.object-row .item-name')).toHaveText(['Run b LED 0', 'Run b plant', 'Run b LED 1']);
+  await objects.getByRole('button', {name:'Run b LED 1',exact:true}).click();
+  await expect(page.getByLabel('Emitted power', {exact:true})).toHaveValue('11');
+  await expect(page.getByLabel('Emitted power', {exact:true})).toBeEnabled();
   await page.getByRole('button', {name:'New run',exact:true}).click();
   await expect(page.getByRole('button', {name:'Scene editor',exact:true})).toHaveClass('active');
   await objects.getByRole('button', {name:'Run b LED 1',exact:true}).click();
@@ -353,6 +402,7 @@ test('mobile run menu renames the selected run beside its dropdown', async ({ pa
   await mockApi(page);
   await page.goto('/');
   await page.getByLabel('Saved runs', {exact:true}).selectOption('test-run');
+  await page.getByRole('button', {name:'Simulation',exact:true}).click();
   await page.getByRole('button', {name:'Actions for Three day experiment',exact:true}).click();
   await page.getByRole('menuitem', {name:'Rename',exact:true}).click();
   await page.getByLabel('New run name', {exact:true}).fill('Mobile experiment');
@@ -531,7 +581,9 @@ test('box selection, click modifiers, escape and result edit protection',async({
   await page.keyboard.press('Escape');await expect(page.getByText('2 selected items',{exact:true})).toHaveCount(0);
   await page.locator('.object-row').first().click();await page.locator('.object-row').nth(1).click({modifiers:['Shift']});
   await expect(page.getByText('2 selected items',{exact:true})).toBeVisible();
-  await page.locator('.run-row').click();await expect(page.getByRole('button',{name:'Create group',exact:true})).toBeDisabled();
+  await page.locator('.run-row').click();
+  await page.getByRole('button',{name:'Simulation',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Create group',exact:true})).toBeDisabled();
   await expect(page.getByRole('button',{name:'Box selection',exact:true})).toHaveCount(0);
 });
 
